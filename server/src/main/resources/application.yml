@@ -1,0 +1,25 @@
+micronaut:
+  application:
+    name: traffic-game
+  server:
+    port: 8000
+    idle-timeout: 30m
+    cors:
+      enabled: true
+    netty:
+      worker:
+        threads: 4
+  router:
+    static-resources:
+      default:
+        enabled: true
+        mapping: "/**"
+        paths: "classpath:public"
+
+game:
+  tick-rate-ms: 100
+  map:
+    width: 128
+    height: 128
+  simulation:
+    max-vehicles: 3000

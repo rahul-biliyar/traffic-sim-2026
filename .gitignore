@@ -1,0 +1,25 @@
+# Gradle
+.gradle/
+build/
+**/build/
+
+# IDE
+.idea/
+*.iml
+.vscode/
+*.code-workspace
+
+# Node
+client/node_modules/
+client/dist/
+
+# Vite
+.vite/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Env
+.env
+.env.local

@@ -1,0 +1,41 @@
+[versions]
+micronaut = "4.7.6"
+micronaut-platform = "4.7.3"
+micronaut-gradle = "4.4.4"
+jackson = "2.18.2"
+logback = "1.5.16"
+snakeyaml = "2.3"
+msgpack = "0.9.8"
+junit = "5.11.4"
+assertj = "3.27.3"
+
+[libraries]
+# Micronaut
+micronaut-websocket = { module = "io.micronaut:micronaut-websocket" }
+micronaut-http-server-netty = { module = "io.micronaut:micronaut-http-server-netty" }
+micronaut-http-client = { module = "io.micronaut:micronaut-http-client" }
+micronaut-jackson-databind = { module = "io.micronaut:micronaut-jackson-databind" }
+micronaut-serde-jackson = { module = "io.micronaut.serde:micronaut-serde-jackson" }
+micronaut-serde-processor = { module = "io.micronaut.serde:micronaut-serde-processor" }
+micronaut-reactor = { module = "io.micronaut.reactor:micronaut-reactor" }
+micronaut-test-junit5 = { module = "io.micronaut.test:micronaut-test-junit5" }
+
+# Jackson
+jackson-databind = { module = "com.fasterxml.jackson.databind:jackson-databind", version.ref = "jackson" }
+
+# MessagePack
+msgpack-core = { module = "org.msgpack:msgpack-core", version.ref = "msgpack" }
+msgpack-jackson = { module = "org.msgpack:jackson-dataformat-msgpack", version.ref = "msgpack" }
+
+# Logging
+logback-classic = { module = "ch.qos.logback:logback-classic", version.ref = "logback" }
+snakeyaml = { module = "org.yaml:snakeyaml", version.ref = "snakeyaml" }
+
+# Testing
+junit-bom = { module = "org.junit:junit-bom", version.ref = "junit" }
+junit-jupiter = { module = "org.junit.jupiter:junit-jupiter" }
+assertj-core = { module = "org.assertj:assertj-core", version.ref = "assertj" }
+
+[plugins]
+micronaut-application = { id = "io.micronaut.application", version.ref = "micronaut-gradle" }
+micronaut-library = { id = "io.micronaut.library", version.ref = "micronaut-gradle" }
