@@ -39,13 +39,13 @@ public enum DistrictTemplate {
     FARMLAND(
             3,
             "Farmland",
-            /* roadSpacing */ 20,
+            /* roadSpacing */ 18,
             /* buildingChance */ 0.12,
             /* minBuildingH */ 6, /* maxBuildingH */ 10,
             /* minBuildingW */ 10, /* maxBuildingW */ 14,
-            RoadSegment.RoadType.PATH,
+            RoadSegment.RoadType.LOCAL,
             /* lanes */ 1,
-            /* speedLimit */ 50,
+            /* speedLimit */ 60,
             /* signalChance */ 0.0,
             BuildingStyle.FARM
     ),

@@ -10,6 +10,7 @@ public final class Intersection {
     private double signalTimer;       // seconds until next state change
     private double greenDuration;     // configurable green phase length
     private int tier;                 // upgrade tier (1-4 for signals)
+    private int districtNumber;       // Voronoi district this intersection belongs to (1-7)
 
     public Intersection(IntersectionType type) {
         this.type = type;
@@ -17,6 +18,7 @@ public final class Intersection {
         this.signalTimer = 30.0;
         this.greenDuration = 30.0;
         this.tier = 1;
+        this.districtNumber = 0;
     }
 
     public IntersectionType getType() { return type; }
@@ -33,6 +35,9 @@ public final class Intersection {
 
     public int getTier() { return tier; }
     public void setTier(int tier) { this.tier = tier; }
+
+    public int getDistrictNumber() { return districtNumber; }
+    public void setDistrictNumber(int districtNumber) { this.districtNumber = districtNumber; }
 
     public enum IntersectionType {
         UNCONTROLLED,

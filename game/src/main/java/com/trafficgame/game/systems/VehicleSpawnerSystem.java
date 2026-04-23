@@ -7,6 +7,7 @@ import com.trafficgame.engine.entity.EntityManager;
 import com.trafficgame.engine.graph.Edge;
 import com.trafficgame.engine.graph.Node;
 import com.trafficgame.engine.graph.PathFinder;
+import com.trafficgame.game.TrafficGame;
 import com.trafficgame.game.config.GameConfig;
 import com.trafficgame.game.model.*;
 
@@ -14,22 +15,31 @@ import java.util.*;
 
 /**
  * Spawns vehicles at entry points and despawns them at exits (route completion).
+ * Vehicles only spawn/travel within UNLOCKED districts.
  */
 public final class VehicleSpawnerSystem implements GameSystem {
 
     private final EntityManager entityManager;
     private final RoadNetwork roadNetwork;
+    private final TrafficGame game;
     private final Random random;
     private double spawnTimer;
+    private double elapsedTime;
+    private static final double RAMP_DURATION = 300.0; // 5 minutes to reach full capacity
+    private static final double INITIAL_CAPACITY_FRACTION = 0.05; // start at 5% of max
     private List<String> entryNodeIds;
     private List<String> exitNodeIds;
     private List<String> interiorNodeIds;
+    // Track which districts were unlocked last time we cached, to detect changes
+    private Set<Integer> cachedUnlockedDistricts = new HashSet<>();
 
-    public VehicleSpawnerSystem(EntityManager entityManager, RoadNetwork roadNetwork, int seed) {
+    public VehicleSpawnerSystem(EntityManager entityManager, RoadNetwork roadNetwork, int seed, TrafficGame game) {
         this.entityManager = entityManager;
         this.roadNetwork = roadNetwork;
+        this.game = game;
         this.random = new Random(seed);
         this.spawnTimer = 0;
+        this.elapsedTime = 0;
         this.entryNodeIds = new ArrayList<>();
         this.exitNodeIds = new ArrayList<>();
         this.interiorNodeIds = new ArrayList<>();
@@ -37,15 +47,27 @@ public final class VehicleSpawnerSystem implements GameSystem {
     }
 
     private void cacheEntryExitNodes() {
-        // Tunnel nodes are the designated entry/exit points
+        entryNodeIds = new ArrayList<>();
+        exitNodeIds = new ArrayList<>();
+        interiorNodeIds = new ArrayList<>();
+
+        // Record which districts are currently unlocked for change detection
+        cachedUnlockedDistricts = new HashSet<>();
+        for (District d : game.getDistricts()) {
+            if (d.isUnlocked()) cachedUnlockedDistricts.add(d.getNumber());
+        }
+
+        // Tunnel nodes are the designated entry/exit points — include all tunnels
+        // (tunnels are the "border" nodes and we want vehicles to route through unlocked areas)
         for (Node<Intersection> node : roadNetwork.getAllNodes()) {
             if (node.getData().getType() == Intersection.IntersectionType.TUNNEL) {
                 entryNodeIds.add(node.getId());
                 exitNodeIds.add(node.getId());
             }
         }
-        // Collect interior nodes (signals and well-connected intersections) as destinations
+        // Collect interior nodes only from unlocked districts
         for (Node<Intersection> node : roadNetwork.getAllNodes()) {
+            if (!isNodeInUnlockedDistrict(node)) continue;
             Intersection.IntersectionType type = node.getData().getType();
             if (type == Intersection.IntersectionType.SIGNAL ||
                 type == Intersection.IntersectionType.STOP ||
@@ -53,9 +75,10 @@ public final class VehicleSpawnerSystem implements GameSystem {
                 interiorNodeIds.add(node.getId());
             }
         }
-        // Also add well-connected UNCONTROLLED nodes as additional spawn/exit points
+        // Also add well-connected UNCONTROLLED nodes in unlocked districts as additional spawn/exit points
         // to ensure vehicles appear across the whole map, not just tunnels
         for (Node<Intersection> node : roadNetwork.getAllNodes()) {
+            if (!isNodeInUnlockedDistrict(node)) continue;
             Intersection.IntersectionType type = node.getData().getType();
             if (type == Intersection.IntersectionType.UNCONTROLLED) {
                 int connections = roadNetwork.getOutgoingEdges(node.getId()).size()
@@ -88,8 +111,34 @@ public final class VehicleSpawnerSystem implements GameSystem {
         }
     }
 
+    /** Call this after a district is unlocked to refresh spawn/route node caches. */
+    public void refreshNodeCache() {
+        cacheEntryExitNodes();
+    }
+
+    /** Check whether a node belongs to an unlocked district (or is a tunnel/border node). */
+    private boolean isNodeInUnlockedDistrict(Node<Intersection> node) {
+        int dn = node.getData().getDistrictNumber();
+        if (dn <= 0) return true; // tunnel or unmapped — always allow
+        for (District d : game.getDistricts()) {
+            if (d.getNumber() == dn) return d.isUnlocked();
+        }
+        return false;
+    }
+
     @Override
     public void update(GameState state, double dt) {
+        elapsedTime += dt;
+
+        // Refresh node cache when districts are unlocked without an explicit call
+        Set<Integer> currentUnlocked = new HashSet<>();
+        for (District d : game.getDistricts()) {
+            if (d.isUnlocked()) currentUnlocked.add(d.getNumber());
+        }
+        if (!currentUnlocked.equals(cachedUnlockedDistricts)) {
+            cacheEntryExitNodes();
+        }
+
         // Vehicles that completed their route get a NEW random route (continuous roaming)
         // Only despawn with 20% probability when reaching a tunnel node (natural exit)
         List<Entity> toReroute = new ArrayList<>();
@@ -118,17 +167,20 @@ public final class VehicleSpawnerSystem implements GameSystem {
             rerouteVehicle(entity);
         }
 
-        // Spawn new vehicles (try multiple per tick to fill up faster)
-        if (entityManager.count() >= GameConfig.MAX_VEHICLES) return;
+        // Spawn new vehicles — capacity ramps up VERY gradually over 5 minutes
+        // Start at 5% of max to avoid 300+ spawn in the first minute
+        double rampFraction = Math.min(1.0, INITIAL_CAPACITY_FRACTION + (1.0 - INITIAL_CAPACITY_FRACTION) * Math.pow(elapsedTime / RAMP_DURATION, 2.0));
+        int currentMaxVehicles = (int) (GameConfig.MAX_VEHICLES * rampFraction);
+        if (entityManager.count() >= currentMaxVehicles) return;
         if (entryNodeIds.isEmpty() || exitNodeIds.isEmpty()) return;
 
         spawnTimer -= dt;
         if (spawnTimer <= 0) {
-            int spawnsPerTick = Math.min(3, GameConfig.MAX_VEHICLES - (int) entityManager.count());
-            for (int i = 0; i < spawnsPerTick; i++) {
+            // Only spawn 1 vehicle per interval — prevents burst spawning
+            if (entityManager.count() < currentMaxVehicles) {
                 spawnVehicle();
             }
-            spawnTimer = GameConfig.VEHICLE_SPAWN_INTERVAL * (0.5 + random.nextDouble());
+            spawnTimer = GameConfig.VEHICLE_SPAWN_INTERVAL * (0.8 + random.nextDouble() * 0.4);
         }
     }
 
@@ -185,7 +237,7 @@ public final class VehicleSpawnerSystem implements GameSystem {
         Edge<RoadSegment> newEdge = roadNetwork.getEdge(path.get(0));
         if (newEdge != null) {
             int lanes = newEdge.getData().getLanes();
-            movement.setLaneIndex(Math.min(movement.getLaneIndex(), lanes - 1));
+            movement.setLaneIndex(random.nextInt(lanes)); // randomize lane for distribution
         }
     }
 

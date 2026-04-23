@@ -13,8 +13,8 @@ public final class GameConfig {
     // Simulation
     public static final double TICK_RATE_HZ = 10.0;
     public static final double TICK_INTERVAL = 1.0 / TICK_RATE_HZ;
-    public static final int MAX_VEHICLES = 800;
-    public static final double VEHICLE_SPAWN_INTERVAL = 0.3; // seconds between spawns
+    public static final int MAX_VEHICLES = 60;
+    public static final double VEHICLE_SPAWN_INTERVAL = 3.0; // seconds between spawns — 1 vehicle at a time
 
     // Traffic
     public static final double DEFAULT_SPEED_LIMIT = 50.0;
@@ -41,12 +41,10 @@ public final class GameConfig {
     public static final double RATING_D_THRESHOLD = 0.35;
 
     // Currency
-    public static final long RP_PER_DELIVERY = 10;
-    public static final long RP_EVENT_BONUS = 100;
-    public static final double RP_RATING_MULTIPLIER_S = 2.0;
-    public static final double RP_RATING_MULTIPLIER_A = 1.5;
-    public static final long BT_DISTRICT_UNLOCK = 5;
-    public static final long BT_ACHIEVEMENT = 1;
+    public static final long USD_PER_DELIVERY = 100_000; // $1,000 per vehicle delivered (in cents)
+    public static final long USD_EVENT_BONUS = 50_000; // $500 bonus
+    public static final double USD_RATING_MULTIPLIER_S = 2.0;
+    public static final double USD_RATING_MULTIPLIER_A = 1.5;
 
     // Weather
     public static final double SEASON_DURATION_SECONDS = 86400.0; // 1 real day = 1 season
@@ -60,14 +58,17 @@ public final class GameConfig {
     public static final double EVENT_MIN_INTERVAL = 60.0; // seconds between events
     public static final double EVENT_MAX_INTERVAL = 180.0;
 
-    // Road costs (in Road Points)
-    public static final long COST_ROAD_PATH = 50;
-    public static final long COST_ROAD_LOCAL = 100;
-    public static final long COST_ROAD_COLLECTOR = 200;
-    public static final long COST_ROAD_ARTERIAL = 500;
-    public static final long COST_ROAD_HIGHWAY = 1000;
-    public static final long COST_SIGNAL = 300;
-    public static final long COST_ROUNDABOUT = 750;
+    // Road costs (in cents USD, realistic US construction)
+    public static final long COST_ROAD_LOCAL = 5_000_000;        // $50,000
+    public static final long COST_ROAD_COLLECTOR = 12_000_000;   // $120,000
+    public static final long COST_ROAD_ARTERIAL = 30_000_000;    // $300,000
+    public static final long COST_ROAD_HIGHWAY = 80_000_000;     // $800,000
+
+    // Intersection types (in cents USD, US traffic standards)
+    public static final long COST_SIGNAL_STOP = 1_500_000;       // $15,000 stop sign
+    public static final long COST_SIGNAL_YIELD = 1_000_000;      // $10,000 yield
+    public static final long COST_SIGNAL_SIGNAL = 7_500_000;     // $75,000 traffic light
+    public static final long COST_SIGNAL_ROUNDABOUT = 20_000_000; // $200,000 roundabout
 
     private GameConfig() {}
 }

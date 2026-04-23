@@ -59,8 +59,22 @@ public final class TrafficGame implements GameState {
         // Create districts from templates
         this.districts = createDistricts();
 
+        // Set district center coordinates from map generation seeds
+        int[][] seeds = map.districtSeeds();
+        if (seeds != null) {
+            for (int i = 0; i < districts.size() && i < seeds.length; i++) {
+                districts.get(i).setCenterX(seeds[i][0]);
+                districts.get(i).setCenterY(seeds[i][1]);
+            }
+        }
+
+        // Unlock first district by default so player starts with something to do
+        if (!districts.isEmpty()) {
+            districts.get(0).setUnlocked(true);
+        }
+
         // Initialize systems in update order
-        this.spawnerSystem = new VehicleSpawnerSystem(entityManager, roadNetwork, seed);
+        this.spawnerSystem = new VehicleSpawnerSystem(entityManager, roadNetwork, seed, this);
         TrafficSignalSystem signalSystem = new TrafficSignalSystem(roadNetwork);
         VehicleMovementSystem movementSystem = new VehicleMovementSystem(entityManager, roadNetwork);
         this.weatherSystem = new WeatherSystem(roadNetwork);

@@ -76,9 +76,29 @@ public class GameWebSocket {
         try {
             PlayerCommand command = objectMapper.readValue(message, PlayerCommand.class);
             sessionManager.handleCommand(sessionId, command);
+
+            // After any road/signal/district mutation, push a fresh snapshot so
+            // the client re-renders the updated geometry immediately.
+            if (isMutationCommand(command.getType())) {
+                SessionManager.GameSession session = sessionManager.getSession(sessionId);
+                if (session != null && wsSession.isOpen()) {
+                    var snapshot = MessageBuilder.buildSnapshot(session.getGame());
+                    String json = objectMapper.writeValueAsString(
+                            Map.of("type", "snapshot", "data", snapshot));
+                    wsSession.sendSync(json);
+                }
+            }
         } catch (Exception e) {
             LOG.warn("Invalid command from session {}: {}", sessionId, e.getMessage());
         }
+    }
+
+    private boolean isMutationCommand(String type) {
+        return type != null && switch (type) {
+            case "upgrade_road", "place_road", "place_signal",
+                 "demolish", "unlock_district" -> true;
+            default -> false;
+        };
     }
 
     @OnClose

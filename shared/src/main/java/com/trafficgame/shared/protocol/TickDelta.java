@@ -16,6 +16,7 @@ public final class TickDelta implements com.trafficgame.engine.protocol.StateDel
     private RatingUpdate ratingUpdate;
     private List<EventUpdate> eventUpdates;
     private WeatherUpdate weatherUpdate;
+    private PlayerUpdate playerUpdate;
 
     public TickDelta() {}
 
@@ -44,9 +45,13 @@ public final class TickDelta implements com.trafficgame.engine.protocol.StateDel
     public WeatherUpdate getWeatherUpdate() { return weatherUpdate; }
     public void setWeatherUpdate(WeatherUpdate v) { this.weatherUpdate = v; }
 
+    public PlayerUpdate getPlayerUpdate() { return playerUpdate; }
+    public void setPlayerUpdate(PlayerUpdate v) { this.playerUpdate = v; }
+
     public record VehicleUpdate(long id, double x, double y, double speed, double angle, String type, int laneIndex, double elevation) {}
     public record SignalUpdate(String intersectionId, String state, double timeRemaining) {}
     public record RatingUpdate(double score, String grade, Map<String, Double> breakdown) {}
     public record EventUpdate(String eventId, String type, String phase, double timeRemaining) {}
     public record WeatherUpdate(String weather, String season, double intensity) {}
+    public record PlayerUpdate(long roadPoints, long blueprintTokens, int vehiclesDelivered) {}
 }

@@ -70,8 +70,8 @@ public final class BuildingPlacer {
                     for (int by = y; by < y + fh; by++)
                         grid[bx][by] = CellType.BUILDING;
 
-                // World dimensions strictly from footprint (88-95% fill)
-                double fill = 0.88 + rng.nextDouble() * 0.07;
+                // World dimensions strictly from footprint (70-82% fill for sidewalk gap)
+                double fill = 0.70 + rng.nextDouble() * 0.12;
                 double worldW = fw * tileSize * fill;
                 double worldD = fh * tileSize * fill;
                 double worldH = tmpl.getMinBuildingH() + rng.nextDouble()
@@ -220,7 +220,9 @@ public final class BuildingPlacer {
     }
 
     private boolean isAdjacentToRoad(CellType[][] grid, int gw, int gh, int x, int y) {
-        for (int[] d : DIRS) {
+        // Check immediate 4-neighbors (1-cell distance) for direct road access
+        int[][] dirs = {{-1,0},{1,0},{0,-1},{0,1}};
+        for (int[] d : dirs) {
             int nx = x + d[0], ny = y + d[1];
             if (nx >= 0 && nx < gw && ny >= 0 && ny < gh) {
                 CellType c = grid[nx][ny];

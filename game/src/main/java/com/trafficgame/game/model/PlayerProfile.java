@@ -16,7 +16,8 @@ public final class PlayerProfile {
     private long playTimeSeconds;
 
     public PlayerProfile() {
-        this.roadPoints = 0;
+        // Start with $2M budget (200,000 cents) — enough to build several local roads
+        this.roadPoints = 200_000_000;
         this.blueprintTokens = 0;
         this.vehiclesDelivered = 0;
         this.eventsCompleted = 0;

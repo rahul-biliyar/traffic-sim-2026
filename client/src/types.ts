@@ -8,6 +8,7 @@ export interface TickDelta {
   ratingUpdate: RatingUpdate;
   eventUpdates: EventUpdate[];
   weatherUpdate: WeatherUpdate;
+  playerUpdate: PlayerUpdate;
 }
 
 export interface VehicleUpdate {
@@ -44,6 +45,12 @@ export interface WeatherUpdate {
   weather: string;
   season: string;
   intensity: number;
+}
+
+export interface PlayerUpdate {
+  roadPoints: number;
+  blueprintTokens: number;
+  vehiclesDelivered: number;
 }
 
 export interface GameStateSnapshot {
@@ -95,9 +102,14 @@ export interface VehicleData {
 export interface DistrictData {
   id: string;
   name: string;
+  number: number;
   unlocked: boolean;
   tier: number;
   unlockProgress: number;
+  vehiclesRequired: number;
+  ratingRequired: string | null;
+  centerX: number;
+  centerY: number;
 }
 
 export interface PlayerData {

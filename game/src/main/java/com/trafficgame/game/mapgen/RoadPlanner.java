@@ -39,6 +39,12 @@ public final class RoadPlanner {
     /** Grid positions explicitly placed as tunnel entries by addTunnelEntries. */
     private final Set<Long> tunnelCellPositions = new HashSet<>();
 
+    /** Corner node IDs (2-way 90° bends) — must not be pruned. */
+    private final Set<String> cornerNodeIds = new HashSet<>();
+
+    /** Grid positions of corner intersections (2 perpendicular neighbors). */
+    private final Set<Long> cornerCellPositions = new HashSet<>();
+
     public RoadPlanner(int seed) {
         this.rng = new Random(seed);
         this.tileSize = GameConfig.TILE_SIZE;
@@ -219,21 +225,9 @@ public final class RoadPlanner {
                 forceLayCell(grid, x, farmCenterY, gw, gh);
         }
 
-        // Also lay connectors at farm edges (quarter points) for redundancy
-        int farmQ1X = fMinX + (fMaxX - fMinX) / 4;
-        int farmQ3X = fMinX + 3 * (fMaxX - fMinX) / 4;
-        for (int fx : new int[]{farmQ1X, farmQ3X}) {
-            if (nearestArtH >= 0) {
-                int y0 = Math.min(farmCenterY, nearestArtH);
-                int y1 = Math.max(farmCenterY, nearestArtH);
-                for (int y = y0; y <= y1; y++)
-                    forceLayCell(grid, fx, y, gw, gh);
-            }
-        }
-
         // Internal farm grid: lay a sparse road grid for building access
-        // Use wider spacing (20) to avoid dense intersection clusters
-        int farmSpacing = 20;
+        // Use wide spacing to create a clean rectangular grid
+        int farmSpacing = 24;
         for (int y = fMinY + farmSpacing; y < fMaxY; y += farmSpacing) {
             for (int x = fMinX; x <= fMaxX; x++) {
                 if (districtGrid[x][y] == 3) forceLayCell(grid, x, y, gw, gh);
@@ -335,6 +329,7 @@ public final class RoadPlanner {
                     boolean isCorner = (hasN || hasS) && (hasE || hasW);
                     if (isCorner) {
                         grid[x][y] = CellType.INTERSECTION;
+                        cornerCellPositions.add(key(x, y));
                     }
                 }
             }
@@ -364,13 +359,17 @@ public final class RoadPlanner {
                 if (tunnelCellPositions.contains(key(x, y))) {
                     it = Intersection.IntersectionType.TUNNEL;
                     tunnelNodeIds.add(nid);
-                } else if (t.getSignalChance() > 0 && rng.nextDouble() < t.getSignalChance()) {
-                    it = Intersection.IntersectionType.SIGNAL;
-                } else {
+                } else if (cornerCellPositions.contains(key(x, y))) {
                     it = Intersection.IntersectionType.UNCONTROLLED;
+                    cornerNodeIds.add(nid);
+                } else {
+                    // All intersections start at STOP — player upgrades them
+                    it = Intersection.IntersectionType.STOP;
                 }
 
-                net.addNode(nid, new Vec2(wx, wy), new Intersection(it));
+                Intersection intersection = new Intersection(it);
+                intersection.setDistrictNumber(dn);
+                net.addNode(nid, new Vec2(wx, wy), intersection);
                 cellNode.put(key(x, y), nid);
             }
 
@@ -398,40 +397,11 @@ public final class RoadPlanner {
                     var tn = net.getNode(tid);
                     double dist = fn.getPosition().distanceTo(tn.getPosition());
 
-                    // Use the HIGHER road tier from the two endpoint districts.
-                    // This ensures roads connecting different density areas get the
-                    // appropriate type (e.g., arterial feeds downtown, not local).
-                    int dnFrom = dg[x][y];
-                    DistrictTemplate tmplFrom = dm.getOrDefault(dnFrom, DistrictTemplate.TOWN_CENTER);
-
-                    // Find the to-node's grid cell to get its district
-                    int toGridX = (int) (tn.getPosition().x() / tileSize);
-                    int toGridY = (int) (tn.getPosition().y() / tileSize);
-                    toGridX = Math.max(0, Math.min(gw - 1, toGridX));
-                    toGridY = Math.max(0, Math.min(gh - 1, toGridY));
-                    int dnTo = dg[toGridX][toGridY];
-                    DistrictTemplate tmplTo = dm.getOrDefault(dnTo, DistrictTemplate.TOWN_CENTER);
-
-                    // Pick the higher-tier road type between the two districts
-                    RoadSegment.RoadType rtFrom = tmplFrom.getDefaultRoadType();
-                    RoadSegment.RoadType rtTo = tmplTo.getDefaultRoadType();
-                    RoadSegment.RoadType rt = rtFrom.ordinal() >= rtTo.ordinal() ? rtFrom : rtTo;
-                    int lanes = Math.max(tmplFrom.getDefaultLanes(), tmplTo.getDefaultLanes());
-                    double speed = Math.max(tmplFrom.getDefaultSpeedLimit(), tmplTo.getDefaultSpeedLimit());
-
-                    // Upgrade to arterial if on a major line
-                    boolean isArterial = arterialRows.contains(y) || arterialCols.contains(x);
-                    if (isArterial) {
-                        rt = RoadSegment.RoadType.ARTERIAL;
-                        lanes = Math.max(lanes, 2);
-                        speed = Math.max(speed, 50);
-                    }
-
-                    // Assign proper intersection type based on road connections
-                    // Local-to-arterial connections get YIELD
-                    // Endpoint / low-connection nodes get STOP
-                    var fromNode = net.getNode(fid);
-                    var toNode = net.getNode(tid);
+                    // All roads start at LOCAL regardless of district — the player upgrades them.
+                    // District templates determine WHAT can be upgraded, not the starting state.
+                    RoadSegment.RoadType rt = RoadSegment.RoadType.LOCAL;
+                    int lanes = 1;
+                    double speed = 40.0;
 
                     String f1 = "e_" + (ei++), f2 = "e_" + (ei++);
                     RoadSegment seg1 = new RoadSegment(lanes, speed, rt);
@@ -583,8 +553,9 @@ public final class RoadPlanner {
             changed = false;
             List<String> rem = new ArrayList<>();
             for (var n : net.getAllNodes()) {
-                // Never prune tunnel nodes
+                // Never prune tunnel or corner nodes
                 if (tunnelNodeIds.contains(n.getId())) continue;
+                if (cornerNodeIds.contains(n.getId())) continue;
                 // Each bidirectional connection = 2 edges (in + out).
                 // c < 4 means 0 or 1 connections — dead ends that trap cars.
                 int c = net.getOutgoingEdges(n.getId()).size()

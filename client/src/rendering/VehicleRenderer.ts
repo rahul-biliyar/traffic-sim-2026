@@ -1,7 +1,7 @@
 import * as THREE from "three";
 import { TickDelta, VehicleUpdate } from "../types";
 
-const VEHICLE_Y = 1.2; // just above road surface at y=0.15
+const VEHICLE_Y = 0.35 + 0.75; // ROAD_Y + half car height so bottom sits on road
 
 /** Colour per vehicle type. */
 const COLOURS: Record<string, number> = {
@@ -13,14 +13,14 @@ const COLOURS: Record<string, number> = {
   MOTORCYCLE: 0x9944ee,
 };
 
-/** (width, height, depth) per vehicle type. */
+/** (width, height, depth) per vehicle type — scaled to fit 2.0-unit lanes. */
 const SIZES: Record<string, [number, number, number]> = {
-  CAR: [3, 2, 5],
-  TRUCK: [3.5, 3, 8],
-  BUS: [3, 3.2, 10],
-  EMERGENCY: [3, 2.5, 6],
-  TAXI: [3, 2, 5],
-  MOTORCYCLE: [1.5, 1.8, 3],
+  CAR: [1.4, 1.2, 3.5],
+  TRUCK: [1.6, 2.0, 5.5],
+  BUS: [1.7, 2.2, 7],
+  EMERGENCY: [1.5, 1.4, 4],
+  TAXI: [1.4, 1.2, 3.5],
+  MOTORCYCLE: [0.6, 1.0, 1.8],
 };
 
 /**

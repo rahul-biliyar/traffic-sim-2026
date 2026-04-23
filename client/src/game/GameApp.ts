@@ -2,6 +2,7 @@ import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { WebSocketClient } from "../network/WebSocketClient";
 import { StateBuffer } from "../network/StateBuffer";
+import { PreviewTerrainRenderer } from "../rendering/PreviewTerrainRenderer";
 import { TerrainRenderer } from "../rendering/TerrainRenderer";
 import { RoadRenderer } from "../rendering/RoadRenderer";
 import { VehicleRenderer } from "../rendering/VehicleRenderer";
@@ -26,10 +27,12 @@ export class GameApp {
   private inputHandler!: InputHandler;
   private hudUpdater!: HudUpdater;
 
+  private previewTerrainRenderer!: PreviewTerrainRenderer;
   private terrainRenderer!: TerrainRenderer;
   private roadRenderer!: RoadRenderer;
   private vehicleRenderer!: VehicleRenderer;
   private buildingRenderer!: BuildingRenderer;
+  private districtMarkerGroup = new THREE.Group();
 
   private snapshot: GameStateSnapshot | null = null;
   private lastTickTime = 0;
@@ -37,14 +40,17 @@ export class GameApp {
   private mapCenterX = 0;
   private mapCenterZ = 0;
   private mapRadius = 600;
+  private started = false;
+  private snapshotReceived = false; // true after first snapshot — camera is NOT re-homed on updates
+  private mayorName = "";
 
   async init(): Promise<void> {
     // Scene – warm sky gradient (not solid blue)
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(0x8aad5e);
 
-    // Soft exponential fog for distant fade (muted sky tone)
-    this.scene.fog = new THREE.FogExp2(0x8aad5e, 0.00015);
+    // Very gentle fog only for far-distance fade — keep the starting district fully clear
+    this.scene.fog = new THREE.FogExp2(0x7aad8a, 0.0003);
 
     // WebGL renderer
     this.renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -102,13 +108,23 @@ export class GameApp {
     );
 
     // Rendering layers
+    this.previewTerrainRenderer = new PreviewTerrainRenderer(this.scene);
+    this.previewTerrainRenderer.build(); // Show preview terrain behind start menu
+
     this.terrainRenderer = new TerrainRenderer(this.scene);
     this.roadRenderer = new RoadRenderer(this.scene);
     this.vehicleRenderer = new VehicleRenderer(this.scene);
     this.buildingRenderer = new BuildingRenderer(this.scene);
+    this.scene.add(this.districtMarkerGroup);
 
     // HUD
     this.hudUpdater = new HudUpdater();
+    this.hudUpdater.setSendCommand((cmd: PlayerCommand) =>
+      this.wsClient?.sendCommand(cmd),
+    );
+    this.hudUpdater.setOnDistrictUnlock((districtId, centerX, centerY) =>
+      this.cameraMoveTo(centerX, centerY),
+    );
 
     // Input (raycasting + keyboard camera)
     this.inputHandler = new InputHandler(
@@ -119,6 +135,31 @@ export class GameApp {
       (cmd: PlayerCommand) => this.wsClient?.sendCommand(cmd),
     );
 
+    // Start menu button
+    document.getElementById("btn-start")!.addEventListener("click", () => {
+      this.startGame();
+    });
+
+    // Resize handler
+    window.addEventListener("resize", () => this.onResize());
+
+    // Start render loop
+    this.animate();
+  }
+
+  private startGame(): void {
+    if (this.started) return;
+    this.started = true;
+
+    // Get mayor name from input
+    const mayorInput = document.getElementById(
+      "mayor-name",
+    ) as HTMLInputElement;
+    this.mayorName = mayorInput?.value.trim() || "Mayor";
+
+    document.getElementById("start-menu")!.style.display = "none";
+    document.getElementById("loading")!.style.display = "flex";
+
     // WebSocket connection
     const sessionId = "game_" + Date.now();
     this.wsClient = new WebSocketClient(sessionId, {
@@ -127,12 +168,6 @@ export class GameApp {
       onError: (err) => console.error("WS error:", err),
     });
     this.wsClient.connect();
-
-    // Resize handler
-    window.addEventListener("resize", () => this.onResize());
-
-    // Start render loop
-    this.animate();
   }
 
   private setupCamera(): void {
@@ -147,11 +182,11 @@ export class GameApp {
       10000,
     );
 
-    // Classic isometric: ~45° azimuth, ~35° elevation
-    const d = 2000;
+    // Position camera over the preview terrain origin (preview is centered at 0,0)
+    const d = 600;
     this.camera.position.set(d * 0.7, d * 0.6, d * 0.7);
     this.camera.lookAt(0, 0, 0);
-    this.camera.zoom = 1.2;
+    this.camera.zoom = 2.0;
     this.camera.updateProjectionMatrix();
   }
 
@@ -186,28 +221,63 @@ export class GameApp {
     document.getElementById("loading")!.style.display = "none";
     document.getElementById("hud")!.style.display = "flex";
     document.getElementById("toolbar")!.style.display = "flex";
+    document.getElementById("district-toggle")!.style.display = "flex";
 
+    // Dispose preview terrain, build real terrain
+    this.previewTerrainRenderer.dispose();
     this.terrainRenderer.build(snapshot);
     this.roadRenderer.build(snapshot);
     this.buildingRenderer.build(snapshot);
     this.hudUpdater.updateFromSnapshot(snapshot);
+    this.hudUpdater.setMayorName(this.mayorName);
 
-    // Centre camera on map
-    const cx = (snapshot.mapWidth * 16) / 2;
-    const cz = (snapshot.mapHeight * 16) / 2;
-    this.mapCenterX = cx;
-    this.mapCenterZ = cz;
+    // Map bounds for camera clamping
+    const mapCx = (snapshot.mapWidth * 16) / 2;
+    const mapCz = (snapshot.mapHeight * 16) / 2;
+    this.mapCenterX = mapCx;
+    this.mapCenterZ = mapCz;
     this.mapRadius = Math.max(snapshot.mapWidth, snapshot.mapHeight) * 16 * 0.4;
-    this.controls.target.set(cx, 0, cz);
 
-    const d = 700;
-    this.camera.position.set(cx + d * 0.7, d * 0.6, cz + d * 0.7);
-    this.camera.updateProjectionMatrix();
-    this.controls.update();
+    // Only home camera on the FIRST snapshot — subsequent snapshots (mutation updates)
+    // must NOT jump the camera back to the district center.
+    if (!this.snapshotReceived) {
+      this.snapshotReceived = true;
+
+      // Pin camera to first unlocked district (or map center as fallback)
+      // District centerX/centerY arrive as world coords (grid * TILE_SIZE) from MessageBuilder
+      let cx = mapCx;
+      let cz = mapCz;
+      const firstDistrict = snapshot.districts?.find((d) => d.unlocked);
+      if (
+        firstDistrict &&
+        firstDistrict.centerX != null &&
+        firstDistrict.centerY != null
+      ) {
+        cx = firstDistrict.centerX;
+        cz = firstDistrict.centerY;
+      }
+
+      // Teleport camera instantly — disable damping so it doesn't drift in
+      const wasDamping = this.controls.enableDamping;
+      this.controls.enableDamping = false;
+      this.controls.target.set(cx, 0, cz);
+      const d = 600;
+      this.camera.position.set(cx + d * 0.7, d * 0.6, cz + d * 0.7);
+      this.camera.zoom = 2.0;
+      this.camera.updateProjectionMatrix();
+      this.controls.update();
+      this.controls.enableDamping = wasDamping;
+
+      // District markers — highlight unlocked district + show all districts on map
+      this.buildDistrictMarkers(snapshot);
+    } else {
+      // Mutation snapshot: rebuild district markers in case unlock state changed
+      this.buildDistrictMarkers(snapshot);
+    }
 
     // Point sun at map centre for proper shadows
-    this.sun.position.set(cx + 500, 800, cz + 400);
-    this.sun.target.position.set(cx, 0, cz);
+    this.sun.position.set(mapCx + 500, 800, mapCz + 400);
+    this.sun.target.position.set(mapCx, 0, mapCz);
     this.sun.target.updateMatrixWorld();
   }
 
@@ -258,5 +328,197 @@ export class GameApp {
     this.camera.bottom = -f / 2;
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(window.innerWidth, window.innerHeight);
+  }
+
+  /** Smoothly pan camera to a world position over ~0.5s */
+  private cameraMoveTo(targetX: number, targetZ: number): void {
+    const startTarget = this.controls.target.clone();
+    const startPos = this.camera.position.clone();
+    const duration = 500; // milliseconds
+    const startTime = performance.now();
+
+    const step = (currentTime: number) => {
+      const elapsed = currentTime - startTime;
+      const t = Math.min(1, elapsed / duration);
+      // Ease-out quadratic
+      const easeT = 1 - (1 - t) * (1 - t);
+
+      // Lerp target
+      this.controls.target.lerpVectors(
+        startTarget,
+        new THREE.Vector3(targetX, 0, targetZ),
+        easeT,
+      );
+
+      // Lerp camera position maintaining isometric angle
+      const relativePos = startPos.clone().sub(startTarget);
+      const targetCamPos = new THREE.Vector3(targetX, 0, targetZ).add(
+        relativePos,
+      );
+      this.camera.position.lerpVectors(startPos, targetCamPos, easeT);
+
+      if (t < 1) {
+        requestAnimationFrame(step);
+      }
+    };
+
+    requestAnimationFrame(step);
+  }
+
+  /**
+   * Renders a flat ground marker for each district:
+   * - Unlocked districts: bright green pulsing ring + district label pillar
+   * - Locked districts: dim grey ring only
+   */
+  private buildDistrictMarkers(snapshot: GameStateSnapshot): void {
+    // Clear existing markers
+    while (this.districtMarkerGroup.children.length > 0) {
+      this.districtMarkerGroup.remove(this.districtMarkerGroup.children[0]);
+    }
+
+    // One colour per district number (1-7) — matches the Voronoi district scheme
+    const DISTRICT_COLORS: Record<number, number> = {
+      1: 0x00ccbb, // Town Center — teal
+      2: 0x66cc44, // Residential — green
+      3: 0xaacc22, // Farmland — yellow-green
+      4: 0xff8844, // Commercial — orange
+      5: 0x6688cc, // Industrial — steel-blue
+      6: 0x9966dd, // Highway Corridor — violet
+      7: 0xffcc00, // Downtown — gold
+    };
+
+    for (const d of snapshot.districts ?? []) {
+      if (d.centerX == null || d.centerY == null) continue;
+      const cx = d.centerX;
+      const cz = d.centerY;
+      const color = DISTRICT_COLORS[d.number] ?? 0x888888;
+
+      if (d.unlocked) {
+        // Large semi-transparent filled disc — the district's territory
+        const discGeo = new THREE.CircleGeometry(50, 52);
+        const discMat = new THREE.MeshBasicMaterial({
+          color,
+          transparent: true,
+          opacity: 0.14,
+          side: THREE.DoubleSide,
+          depthWrite: false,
+        });
+        const disc = new THREE.Mesh(discGeo, discMat);
+        disc.rotation.x = -Math.PI / 2;
+        disc.position.set(cx, 0.4, cz);
+        this.districtMarkerGroup.add(disc);
+
+        // Solid outer border ring — bold, coloured
+        const borderGeo = new THREE.RingGeometry(48.5, 51.5, 52);
+        const borderMat = new THREE.MeshBasicMaterial({
+          color,
+          transparent: true,
+          opacity: 0.85,
+          side: THREE.DoubleSide,
+          depthWrite: false,
+        });
+        const border = new THREE.Mesh(borderGeo, borderMat);
+        border.rotation.x = -Math.PI / 2;
+        border.position.set(cx, 0.5, cz);
+        this.districtMarkerGroup.add(border);
+
+        // Centre dot
+        const dotGeo = new THREE.CircleGeometry(5.5, 24);
+        const dotMat = new THREE.MeshBasicMaterial({
+          color,
+          transparent: true,
+          opacity: 0.9,
+          side: THREE.DoubleSide,
+          depthWrite: false,
+        });
+        const dot = new THREE.Mesh(dotGeo, dotMat);
+        dot.rotation.x = -Math.PI / 2;
+        dot.position.set(cx, 0.5, cz);
+        this.districtMarkerGroup.add(dot);
+
+        // Thin cylinder beacon — visible at any zoom level
+        const beaconGeo = new THREE.CylinderGeometry(0.7, 0.7, 32, 8);
+        const beaconMat = new THREE.MeshBasicMaterial({
+          color,
+          transparent: true,
+          opacity: 0.65,
+        });
+        const beacon = new THREE.Mesh(beaconGeo, beaconMat);
+        beacon.position.set(cx, 16, cz);
+        this.districtMarkerGroup.add(beacon);
+
+        // Name label sprite
+        const label = this.makeDistrictLabel(d.name.replace(/_/g, " "), color);
+        label.position.set(cx, 38, cz);
+        this.districtMarkerGroup.add(label);
+      } else {
+        // Locked district — faint grey dashed ring only
+        const borderGeo = new THREE.RingGeometry(48, 51, 52);
+        const borderMat = new THREE.MeshBasicMaterial({
+          color: 0x334455,
+          transparent: true,
+          opacity: 0.22,
+          side: THREE.DoubleSide,
+          depthWrite: false,
+        });
+        const border = new THREE.Mesh(borderGeo, borderMat);
+        border.rotation.x = -Math.PI / 2;
+        border.position.set(cx, 0.5, cz);
+        this.districtMarkerGroup.add(border);
+
+        // Grey centre dot
+        const dotGeo = new THREE.CircleGeometry(3.5, 16);
+        const dotMat = new THREE.MeshBasicMaterial({
+          color: 0x334455,
+          transparent: true,
+          opacity: 0.22,
+          side: THREE.DoubleSide,
+          depthWrite: false,
+        });
+        const dot = new THREE.Mesh(dotGeo, dotMat);
+        dot.rotation.x = -Math.PI / 2;
+        dot.position.set(cx, 0.5, cz);
+        this.districtMarkerGroup.add(dot);
+      }
+    }
+  }
+
+  private makeDistrictLabel(name: string, color: number): THREE.Sprite {
+    const canvas = document.createElement("canvas");
+    canvas.width = 256;
+    canvas.height = 64;
+    const ctx = canvas.getContext("2d")!;
+    ctx.clearRect(0, 0, 256, 64);
+
+    // Coloured pill background
+    const r = (color >> 16) & 0xff;
+    const g = (color >> 8) & 0xff;
+    const b = color & 0xff;
+    ctx.fillStyle = `rgba(${r}, ${g}, ${b}, 0.65)`;
+    ctx.beginPath();
+    (ctx as CanvasRenderingContext2D & { roundRect: Function }).roundRect(
+      4,
+      4,
+      248,
+      56,
+      16,
+    );
+    ctx.fill();
+
+    ctx.font = "bold 22px Arial, sans-serif";
+    ctx.fillStyle = "#ffffff";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(name, 128, 32);
+
+    const tex = new THREE.CanvasTexture(canvas);
+    const mat = new THREE.SpriteMaterial({
+      map: tex,
+      transparent: true,
+      depthWrite: false,
+    });
+    const sprite = new THREE.Sprite(mat);
+    sprite.scale.set(42, 10.5, 1);
+    return sprite;
   }
 }

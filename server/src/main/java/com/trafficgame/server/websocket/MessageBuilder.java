@@ -5,6 +5,7 @@ import com.trafficgame.engine.graph.Edge;
 import com.trafficgame.engine.graph.Node;
 import com.trafficgame.engine.util.Vec2;
 import com.trafficgame.game.TrafficGame;
+import com.trafficgame.game.config.GameConfig;
 import com.trafficgame.game.model.*;
 import com.trafficgame.game.systems.WeatherSystem;
 import com.trafficgame.shared.protocol.*;
@@ -56,7 +57,7 @@ public final class MessageBuilder {
             double elevation = 0.0;
             if (edge.getData().isBridge()) {
                 double t = movement.getPositionOnEdge();
-                double bridgeHeight = 8.0;
+                double bridgeHeight = 2.5; // must match client RoadRenderer bridgeHeight
                 double rampFraction = 0.2; // 20% of edge is ramp at each end
                 if (t < rampFraction) {
                     elevation = bridgeHeight * (t / rampFraction);
@@ -102,6 +103,11 @@ public final class MessageBuilder {
                         e.getId(), e.getType().name(), e.getPhase().name(), e.getActiveTimeRemaining()))
                 .collect(Collectors.toList());
         delta.setEventUpdates(eventUpdates);
+
+        // Player currency
+        PlayerProfile profile2 = game.getPlayerProfile();
+        delta.setPlayerUpdate(new TickDelta.PlayerUpdate(
+                profile2.getRoadPoints(), profile2.getBlueprintTokens(), profile2.getVehiclesDelivered()));
 
         return delta;
     }
@@ -162,7 +168,14 @@ public final class MessageBuilder {
         // Districts
         List<GameStateSnapshot.DistrictData> districts = game.getDistricts().stream()
                 .map(d -> new GameStateSnapshot.DistrictData(
-                        d.getId(), d.getName(), d.isUnlocked(), d.getTier(), 0))
+                        d.getId(), d.getName(), d.getNumber(), d.isUnlocked(), d.getTier(),
+                        d.getVehiclesRequired() > 0
+                            ? (double) game.getPlayerProfile().getVehiclesDelivered() / d.getVehiclesRequired()
+                            : 1.0,
+                        d.getVehiclesRequired(),
+                        d.getRatingRequired(),
+                        d.getCenterX() * GameConfig.TILE_SIZE,
+                        d.getCenterY() * GameConfig.TILE_SIZE))
                 .collect(Collectors.toList());
         snapshot.setDistricts(districts);
 

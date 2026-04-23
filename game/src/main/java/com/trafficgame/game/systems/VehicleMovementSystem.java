@@ -18,7 +18,7 @@ import java.util.*;
  */
 public final class VehicleMovementSystem implements GameSystem {
 
-    private static final double LANE_WIDTH = 3.7; // world units per lane (matches visual lane width)
+    private static final double LANE_WIDTH = 2.0; // world units per lane (matches visual lane width)
 
     private final EntityManager entityManager;
     private final RoadNetwork roadNetwork;
@@ -105,11 +105,10 @@ public final class VehicleMovementSystem implements GameSystem {
                         }
                     }
 
-                    // Cross-edge collision avoidance at intersections:
+                    // Cross-edge collision avoidance at ALL intersection types:
                     // If another vehicle on a different incoming edge is also close to this
                     // intersection, slow down to avoid collision in the intersection area.
-                    if (iType == Intersection.IntersectionType.UNCONTROLLED ||
-                        iType == Intersection.IntersectionType.YIELD) {
+                    {
                         boolean crossingConflict = false;
                         List<Edge<RoadSegment>> incomingEdges = roadNetwork.getIncomingEdges(edge.getToNodeId());
                         for (Edge<RoadSegment> otherEdge : incomingEdges) {
@@ -118,7 +117,7 @@ public final class VehicleMovementSystem implements GameSystem {
                             if (otherVehicles == null) continue;
                             for (Entity otherEntity : otherVehicles) {
                                 VehicleMovement om = otherEntity.get(VehicleMovement.class);
-                                if (om.getPositionOnEdge() > 0.80 && om.getSpeed() > 2.0) {
+                                if (om.getPositionOnEdge() > 0.75 && om.getSpeed() > 1.0) {
                                     crossingConflict = true;
                                     break;
                                 }
@@ -127,8 +126,8 @@ public final class VehicleMovementSystem implements GameSystem {
                         }
                         if (crossingConflict) {
                             double distToInter = (1.0 - movement.getPositionOnEdge()) * edge.getWeight();
-                            if (distToInter < 15.0) {
-                                double yieldSpeed = maxSpeed * 0.2;
+                            if (distToInter < 20.0) {
+                                double yieldSpeed = maxSpeed * 0.15;
                                 if (movement.getSpeed() > yieldSpeed) {
                                     movement.setSpeed(Math.max(yieldSpeed, movement.getSpeed() - info.getConfig().acceleration() * dt * 2));
                                 }
@@ -140,17 +139,31 @@ public final class VehicleMovementSystem implements GameSystem {
 
             // ── Gap to leading vehicle (same edge, same lane) ──
             double gap = Double.MAX_VALUE;
+            double anyLaneGap = Double.MAX_VALUE;
             List<Entity> edgeVehicles = vehiclesByEdge.get(movement.getCurrentEdgeId());
             if (edgeVehicles != null) {
                 for (Entity other : edgeVehicles) {
                     if (other.getId() == entity.getId()) continue;
                     VehicleMovement om = other.get(VehicleMovement.class);
-                    if (om.getLaneIndex() != movement.getLaneIndex()) continue;
                     if (om.getPositionOnEdge() > movement.getPositionOnEdge()) {
                         double g = (om.getPositionOnEdge() - movement.getPositionOnEdge()) * edge.getWeight();
-                        gap = Math.min(gap, g);
+                        if (om.getLaneIndex() == movement.getLaneIndex()) {
+                            gap = Math.min(gap, g);
+                        }
+                        // Track gap to ANY vehicle ahead (for minimum safety distance)
+                        anyLaneGap = Math.min(anyLaneGap, g);
                     }
                 }
+            }
+
+            // Enforce minimum following distance (vehicle length + 2m gap)
+            double minFollowGap = 6.0; // ~vehicle length + buffer
+            if (gap < minFollowGap && gap < Double.MAX_VALUE) {
+                double emergencyDecel = info.getConfig().acceleration() * 3.0;
+                double newSpeedEmergency = Math.max(0, movement.getSpeed() - emergencyDecel * dt);
+                movement.setSpeed(newSpeedEmergency);
+                computeLaneOffset(movement, segment);
+                continue;
             }
 
             // IDM acceleration

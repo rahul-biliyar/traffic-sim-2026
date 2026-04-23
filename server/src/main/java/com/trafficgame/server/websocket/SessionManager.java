@@ -107,8 +107,14 @@ public final class SessionManager {
                 case "place_road" -> commandHandler.handlePlaceRoad(
                         command.getX(), command.getY(), command.getX2(), command.getY2(),
                         command.getData() != null ? command.getData() : "LOCAL");
-                case "place_signal" -> commandHandler.handlePlaceSignal(command.getTargetId());
+                case "place_signal" -> commandHandler.handlePlaceSignal(
+                        command.getTargetId(),
+                        command.getData() != null ? command.getData() : "STOP");
+                case "upgrade_road" -> commandHandler.handleUpgradeRoad(
+                        command.getX(), command.getY(),
+                        command.getData() != null ? command.getData() : "LOCAL");
                 case "demolish" -> commandHandler.handleDemolish(command.getTargetId());
+                case "unlock_district" -> commandHandler.handleUnlockDistrict(command.getData());
             }
         }
 

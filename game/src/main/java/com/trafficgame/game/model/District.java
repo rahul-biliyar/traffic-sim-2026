@@ -13,6 +13,8 @@ public final class District {
     private int vehiclesRequired;    // unlock condition
     private String ratingRequired;   // minimum rating to unlock (null if none)
     private String description;
+    private int centerX;             // Voronoi seed X in grid coords
+    private int centerY;             // Voronoi seed Y in grid coords
 
     public District(String id, String name, int number, int vehiclesRequired, String ratingRequired) {
         this.id = id;
@@ -35,4 +37,8 @@ public final class District {
     public String getRatingRequired() { return ratingRequired; }
     public String getDescription() { return description; }
     public void setDescription(String description) { this.description = description; }
+    public int getCenterX() { return centerX; }
+    public void setCenterX(int centerX) { this.centerX = centerX; }
+    public int getCenterY() { return centerY; }
+    public void setCenterY(int centerY) { this.centerY = centerY; }
 }

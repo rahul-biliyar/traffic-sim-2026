@@ -81,8 +81,9 @@ public final class GameStateSnapshot implements com.trafficgame.engine.protocol.
     public record BuildingSnapshotData(String id, double x, double z, double width, double depth,
                                         double height, String style, int districtNumber, int colorIndex) {}
 
-    public record DistrictData(String id, String name, boolean unlocked, int tier,
-                                double unlockProgress) {}
+    public record DistrictData(String id, String name, int number, boolean unlocked, int tier,
+                                double unlockProgress, int vehiclesRequired, String ratingRequired,
+                                double centerX, double centerY) {}
 
     public record PlayerData(long roadPoints, long blueprintTokens, String ratingGrade,
                               double ratingScore, int cityTier, int vehiclesDelivered) {}

@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Traffic Game</title>
+    <title>Traffic Sim 2026</title>
     <style>
       * {
         margin: 0;
@@ -15,7 +15,12 @@
         width: 100%;
         height: 100%;
         overflow: hidden;
-        background: #1a1a2e;
+        background: #0a0a14;
+        font-family:
+          Inter,
+          Segoe UI,
+          system-ui,
+          sans-serif;
       }
       #game-container {
         width: 100%;
@@ -25,42 +30,109 @@
       canvas {
         display: block;
       }
+
+      /* Start Menu — blurred map background */
+      #start-menu {
+        position: absolute;
+        inset: 0;
+        z-index: 200;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        background: rgba(5, 5, 15, 0.75);
+        backdrop-filter: blur(20px);
+        -webkit-backdrop-filter: blur(20px);
+      }
+      #start-menu h1 {
+        font-size: 52px;
+        font-weight: 800;
+        color: #fff;
+        letter-spacing: -2px;
+        margin-bottom: 4px;
+      }
+      #start-menu .subtitle {
+        font-size: 13px;
+        color: rgba(255, 255, 255, 0.35);
+        margin-bottom: 32px;
+        letter-spacing: 1px;
+      }
+      #start-menu .name-input {
+        width: 240px;
+        padding: 10px 16px;
+        margin-bottom: 20px;
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        border-radius: 6px;
+        background: rgba(255, 255, 255, 0.04);
+        color: #fff;
+        font-size: 14px;
+        outline: none;
+        text-align: center;
+        transition: border-color 0.2s;
+      }
+      #start-menu .name-input::placeholder {
+        color: rgba(255, 255, 255, 0.25);
+      }
+      #start-menu .name-input:focus {
+        border-color: rgba(100, 200, 255, 0.4);
+      }
+      #start-menu .start-btn {
+        padding: 10px 36px;
+        border: 1px solid rgba(255, 255, 255, 0.15);
+        border-radius: 6px;
+        background: rgba(255, 255, 255, 0.06);
+        color: #fff;
+        font-size: 15px;
+        font-weight: 500;
+        cursor: pointer;
+        transition: all 0.2s;
+      }
+      #start-menu .start-btn:hover {
+        background: rgba(255, 255, 255, 0.12);
+        border-color: rgba(100, 200, 255, 0.4);
+      }
+
+      /* Glass Panel */
+      .glass {
+        background: rgba(10, 10, 20, 0.55);
+        backdrop-filter: blur(12px);
+        -webkit-backdrop-filter: blur(12px);
+        border: 1px solid rgba(255, 255, 255, 0.06);
+        border-radius: 8px;
+      }
+
+      /* HUD Top Bar */
       #hud {
         position: absolute;
-        top: 0;
-        left: 0;
-        right: 0;
-        display: flex;
-        justify-content: space-between;
+        top: 8px;
+        left: 8px;
+        right: 8px;
+        display: none;
         align-items: center;
-        padding: 8px 16px;
-        background: rgba(0, 0, 0, 0.7);
-        color: #fff;
-        font-family: "Segoe UI", system-ui, sans-serif;
-        font-size: 14px;
+        justify-content: space-between;
+        padding: 5px 12px;
         z-index: 10;
-        pointer-events: none;
-      }
-      #hud > div {
-        pointer-events: auto;
+        color: #fff;
+        font-size: 12px;
       }
       .hud-section {
         display: flex;
-        gap: 16px;
+        gap: 14px;
         align-items: center;
       }
       .hud-item {
         display: flex;
-        flex-direction: column;
         align-items: center;
+        gap: 4px;
       }
       .hud-label {
-        font-size: 10px;
-        opacity: 0.6;
+        font-size: 9px;
+        opacity: 0.4;
         text-transform: uppercase;
+        letter-spacing: 0.5px;
       }
       .hud-value {
-        font-size: 18px;
+        font-size: 15px;
         font-weight: 600;
       }
       .rating-S {
@@ -81,136 +153,389 @@
       .rating-F {
         color: #ff0000;
       }
+
+      /* Toolbar */
       #toolbar {
         position: absolute;
-        bottom: 16px;
+        bottom: 10px;
         left: 50%;
         transform: translateX(-50%);
-        display: flex;
-        gap: 8px;
-        padding: 8px;
-        border-radius: 12px;
-        background: rgba(0, 0, 0, 0.8);
+        display: none;
+        gap: 4px;
+        padding: 4px;
         z-index: 10;
       }
       .tool-btn {
-        width: 48px;
-        height: 48px;
-        border: 2px solid #333;
-        border-radius: 8px;
-        background: #222;
+        width: 40px;
+        height: 40px;
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        border-radius: 6px;
+        background: rgba(255, 255, 255, 0.04);
         color: #fff;
         cursor: pointer;
-        font-size: 20px;
+        font-size: 18px;
         display: flex;
         align-items: center;
         justify-content: center;
         transition: all 0.15s;
       }
       .tool-btn:hover {
-        border-color: #4488ff;
-        background: #333;
+        background: rgba(255, 255, 255, 0.1);
+        border-color: rgba(100, 200, 255, 0.3);
       }
       .tool-btn.active {
-        border-color: #00ff88;
-        background: #1a3a2a;
+        background: rgba(0, 255, 136, 0.1);
+        border-color: rgba(0, 255, 136, 0.4);
       }
-      .tool-btn .label {
-        font-size: 9px;
+
+      /* Road Type Bar */
+      #road-type-bar {
         position: absolute;
-        bottom: 2px;
+        bottom: 58px;
+        left: 50%;
+        transform: translateX(-50%);
+        display: none;
+        gap: 3px;
+        padding: 4px;
+        z-index: 10;
       }
+      #road-type-bar.visible {
+        display: flex;
+      }
+      .road-type-btn {
+        padding: 4px 10px;
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        border-radius: 5px;
+        background: rgba(255, 255, 255, 0.04);
+        color: #fff;
+        cursor: pointer;
+        font-size: 11px;
+        white-space: nowrap;
+        transition: all 0.15s;
+      }
+      .road-type-btn:hover {
+        background: rgba(255, 255, 255, 0.1);
+        border-color: rgba(100, 200, 255, 0.3);
+      }
+      .road-type-btn.active {
+        background: rgba(0, 255, 136, 0.1);
+        border-color: rgba(0, 255, 136, 0.4);
+      }
+      .road-type-btn .cost {
+        font-size: 9px;
+        opacity: 0.5;
+        margin-left: 3px;
+      }
+
+      /* Signal Type Bar */
+      #signal-type-bar {
+        position: absolute;
+        bottom: 58px;
+        left: 50%;
+        transform: translateX(-50%);
+        display: none;
+        gap: 3px;
+        padding: 4px;
+        z-index: 10;
+      }
+      #signal-type-bar.visible {
+        display: flex;
+      }
+      .signal-type-btn {
+        padding: 4px 10px;
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        border-radius: 5px;
+        background: rgba(255, 255, 255, 0.04);
+        color: #fff;
+        cursor: pointer;
+        font-size: 11px;
+        white-space: nowrap;
+        transition: all 0.15s;
+      }
+      .signal-type-btn:hover {
+        background: rgba(255, 255, 255, 0.1);
+        border-color: rgba(100, 200, 255, 0.3);
+      }
+      .signal-type-btn.active {
+        background: rgba(0, 255, 136, 0.1);
+        border-color: rgba(0, 255, 136, 0.4);
+      }
+      .signal-type-btn .cost {
+        font-size: 9px;
+        opacity: 0.5;
+        margin-left: 3px;
+      }
+
+      /* District Panel */
+      #district-panel {
+        position: absolute;
+        top: 48px;
+        left: 8px;
+        width: 180px;
+        z-index: 10;
+        display: none;
+        max-height: calc(100vh - 120px);
+        overflow-y: auto;
+        padding: 6px;
+        font-size: 11px;
+        color: #fff;
+      }
+      #district-panel.visible {
+        display: block;
+      }
+      .district-header {
+        font-size: 10px;
+        font-weight: 600;
+        opacity: 0.4;
+        padding: 4px 6px;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+      }
+      .district-card {
+        padding: 6px 8px;
+        margin-bottom: 2px;
+        border-radius: 5px;
+        background: rgba(255, 255, 255, 0.03);
+        cursor: pointer;
+        transition: background 0.15s;
+      }
+      .district-card:hover {
+        background: rgba(255, 255, 255, 0.08);
+      }
+      .district-card.locked {
+        opacity: 0.4;
+      }
+      .district-card.unlocked {
+        border-left: 2px solid rgba(0, 255, 136, 0.6);
+      }
+      .district-card .district-name {
+        font-weight: 600;
+        font-size: 11px;
+      }
+      .district-card .district-req {
+        font-size: 9px;
+        opacity: 0.5;
+        margin-top: 1px;
+      }
+      .district-toggle {
+        position: absolute;
+        top: 48px;
+        left: 8px;
+        width: 30px;
+        height: 30px;
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        border-radius: 6px;
+        background: rgba(10, 10, 20, 0.6);
+        backdrop-filter: blur(12px);
+        color: #fff;
+        cursor: pointer;
+        font-size: 14px;
+        z-index: 11;
+        display: none;
+        align-items: center;
+        justify-content: center;
+      }
+      .district-toggle:hover {
+        border-color: rgba(100, 200, 255, 0.3);
+      }
+
+      /* Event Panel */
       #event-panel {
         position: absolute;
-        top: 60px;
-        right: 16px;
-        width: 240px;
+        top: 48px;
+        right: 8px;
+        width: 200px;
         z-index: 10;
       }
       .event-card {
-        background: rgba(0, 0, 0, 0.8);
-        border-radius: 8px;
-        padding: 12px;
-        margin-bottom: 8px;
-        border-left: 3px solid #ff8844;
+        padding: 8px 10px;
+        margin-bottom: 4px;
+        border-radius: 6px;
+        background: rgba(10, 10, 20, 0.6);
+        backdrop-filter: blur(12px);
+        border: 1px solid rgba(255, 255, 255, 0.06);
+        border-left: 2px solid #ff8844;
         color: #fff;
-        font-family: system-ui, sans-serif;
-        font-size: 12px;
+        font-size: 11px;
       }
       .event-card.active {
         border-left-color: #ff4444;
       }
       .event-card .event-type {
         font-weight: 600;
-        font-size: 14px;
+        font-size: 12px;
       }
       .event-card .event-timer {
+        opacity: 0.5;
+        font-size: 10px;
+      }
+
+      /* Unlock Notification */
+      #unlock-notification {
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        padding: 24px 40px;
+        z-index: 100;
+        display: none;
+        text-align: center;
+        color: #fff;
+        animation: fadeInUp 0.4s ease;
+      }
+      #unlock-notification h2 {
+        font-size: 22px;
+        font-weight: 700;
+        margin-bottom: 4px;
+      }
+      #unlock-notification p {
+        font-size: 13px;
         opacity: 0.6;
       }
+      @keyframes fadeInUp {
+        from {
+          opacity: 0;
+          transform: translate(-50%, -30%);
+        }
+        to {
+          opacity: 1;
+          transform: translate(-50%, -50%);
+        }
+      }
+
+      /* Loading */
       #loading {
         position: absolute;
         inset: 0;
-        display: flex;
+        display: none;
         align-items: center;
         justify-content: center;
-        background: #1a1a2e;
-        color: #fff;
-        font-family: system-ui;
-        font-size: 24px;
-        z-index: 100;
+        background: rgba(5, 5, 15, 0.85);
+        backdrop-filter: blur(12px);
+        color: rgba(255, 255, 255, 0.6);
+        font-size: 14px;
+        z-index: 150;
       }
     </style>
   </head>
   <body>
     <div id="game-container">
+      <!-- Start Menu -->
+      <div id="start-menu">
+        <h1>Traffic Sim 2026</h1>
+        <div class="subtitle">CITY TRAFFIC MANAGEMENT SIMULATOR</div>
+        <input
+          class="name-input"
+          id="mayor-name"
+          type="text"
+          placeholder="Enter Mayor Name"
+          maxlength="20"
+          autocomplete="off"
+        />
+        <button class="start-btn" id="btn-start">Start Simulation</button>
+      </div>
+
+      <!-- Loading -->
       <div id="loading">Connecting...</div>
-      <div id="hud" style="display: none">
+
+      <!-- HUD -->
+      <div id="hud" class="glass" style="display: none">
         <div class="hud-section">
           <div class="hud-item">
-            <span class="hud-label">Rating</span>
+            <div>
+              <div class="hud-label">Mayor</div>
+              <span class="hud-value" id="hud-mayor" style="font-size: 13px"
+                >—</span
+              >
+            </div>
+          </div>
+          <div class="hud-item">
             <span class="hud-value" id="hud-rating">B</span>
           </div>
           <div class="hud-item">
-            <span class="hud-label">Score</span>
-            <span class="hud-value" id="hud-score">0.80</span>
+            <span class="hud-label">USD</span
+            ><span class="hud-value" id="hud-budget">0</span>
           </div>
         </div>
         <div class="hud-section">
           <div class="hud-item">
-            <span class="hud-label">Vehicles</span>
-            <span class="hud-value" id="hud-vehicles">0</span>
+            <span class="hud-value" id="hud-vehicles">0</span
+            ><span class="hud-label">vehicles</span>
           </div>
           <div class="hud-item">
-            <span class="hud-label">Weather</span>
-            <span class="hud-value" id="hud-weather">☀️</span>
+            <span class="hud-value" id="hud-weather"></span>
           </div>
           <div class="hud-item">
-            <span class="hud-label">Season</span>
             <span class="hud-value" id="hud-season">Spring</span>
           </div>
         </div>
-        <div class="hud-section">
-          <div class="hud-item">
-            <span class="hud-label">Road Points</span>
-            <span class="hud-value" id="hud-rp">0</span>
-          </div>
-          <div class="hud-item">
-            <span class="hud-label">Blueprints</span>
-            <span class="hud-value" id="hud-bt">0</span>
-          </div>
-        </div>
       </div>
-      <div id="toolbar" style="display: none">
-        <button class="tool-btn" data-tool="select" title="Select">🖱️</button>
-        <button class="tool-btn" data-tool="road" title="Build Road">🛣️</button>
-        <button class="tool-btn" data-tool="signal" title="Place Signal">
-          🚦
+
+      <!-- Toolbar (Select, Road, Signal) -->
+      <div id="toolbar" class="glass" style="display: none">
+        <button class="tool-btn active" data-tool="select" title="Select [1]">
+          &#8598;
         </button>
-        <button class="tool-btn" data-tool="demolish" title="Demolish">
-          🗑️
+        <button
+          class="tool-btn"
+          data-tool="road"
+          title="Build/Upgrade Road [2]"
+        >
+          &#9776;
+        </button>
+        <button
+          class="tool-btn"
+          data-tool="signal"
+          title="Intersection Control [3]"
+        >
+          &#128678;
         </button>
       </div>
+
+      <!-- Road Type Selector -->
+      <div id="road-type-bar" class="glass">
+        <button class="road-type-btn active" data-road="LOCAL">
+          Local<span class="cost">$50K</span>
+        </button>
+        <button class="road-type-btn" data-road="COLLECTOR">
+          Collector<span class="cost">$120K</span>
+        </button>
+        <button class="road-type-btn" data-road="ARTERIAL">
+          Arterial<span class="cost">$300K</span>
+        </button>
+        <button class="road-type-btn" data-road="HIGHWAY">
+          Highway<span class="cost">$800K</span>
+        </button>
+      </div>
+
+      <!-- Signal/Intersection Type Selector -->
+      <div id="signal-type-bar" class="glass">
+        <button class="signal-type-btn active" data-signal="STOP">
+          Stop Sign<span class="cost">$15K</span>
+        </button>
+        <button class="signal-type-btn" data-signal="YIELD">
+          Yield<span class="cost">$10K</span>
+        </button>
+        <button class="signal-type-btn" data-signal="SIGNAL">
+          Traffic Light<span class="cost">$75K</span>
+        </button>
+        <button class="signal-type-btn" data-signal="ROUNDABOUT">
+          Roundabout<span class="cost">$200K</span>
+        </button>
+      </div>
+
+      <!-- District Toggle + Panel -->
+      <button class="district-toggle" id="district-toggle">&#127960;</button>
+      <div id="district-panel" class="glass">
+        <div class="district-header">Districts</div>
+        <div id="district-list"></div>
+      </div>
+
+      <!-- Event Panel -->
       <div id="event-panel"></div>
+
+      <!-- District Unlock Notification -->
+      <div id="unlock-notification" class="glass"></div>
     </div>
     <script type="module" src="./main.ts"></script>
   </body>

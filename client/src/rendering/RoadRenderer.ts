@@ -6,10 +6,10 @@ import {
   SignalUpdate,
 } from "../types";
 
-const ROAD_Y = 0.35; // comfortably above flat terrain (elev=0)
+const ROAD_Y = 0.35;
 const ROAD_THICKNESS = 0.3;
+const LANE_WIDTH = 2.0;
 
-/** Road surface colour by type. */
 const ROAD_COLOURS: Record<string, number> = {
   HIGHWAY: 0x3a3a4a,
   ARTERIAL: 0x505050,
@@ -18,22 +18,47 @@ const ROAD_COLOURS: Record<string, number> = {
   PATH: 0x887766,
 };
 
-/** Dim colour for inactive signal lights. */
 const LIGHT_DIM = 0x222222;
 const LIGHT_RED = 0xff0000;
 const LIGHT_YELLOW = 0xffaa00;
 const LIGHT_GREEN = 0x00ff66;
 
-/**
- * Renders the road network as solid 3D strips with markings, intersection pads,
- * and traffic lights whose colours update each tick.
- */
+function computeRoadWidth(roadType: string, lanes: number): number {
+  switch (roadType) {
+    case "HIGHWAY":
+      return lanes * 2 * LANE_WIDTH + 2;
+    case "ARTERIAL":
+      return lanes * 2 * LANE_WIDTH + 1;
+    case "COLLECTOR":
+      return lanes * 2 * LANE_WIDTH + 0.5;
+    case "LOCAL":
+      return lanes * 2 * LANE_WIDTH;
+    case "PATH":
+      return LANE_WIDTH * 1.5;
+    default:
+      return lanes * 2 * LANE_WIDTH;
+  }
+}
+
+function computeShoulderWidth(roadType: string): number {
+  switch (roadType) {
+    case "HIGHWAY":
+      return 1.0;
+    case "ARTERIAL":
+      return 0.5;
+    default:
+      return 0;
+  }
+}
+
+function hasMedianDivider(roadType: string, lanes: number): boolean {
+  return roadType === "HIGHWAY" || (roadType === "ARTERIAL" && lanes >= 2);
+}
+
 export class RoadRenderer {
   private scene: THREE.Scene;
   private group = new THREE.Group();
   private terrain: number[][] | null = null;
-
-  /** Map of intersection ID → [red, yellow, green] light meshes. */
   private signalLights = new Map<string, THREE.Mesh[]>();
 
   constructor(scene: THREE.Scene) {
@@ -48,7 +73,6 @@ export class RoadRenderer {
     const interMap = new Map<string, IntersectionData>();
     for (const i of snapshot.intersections) interMap.set(i.id, i);
 
-    // Build map of intersection → connected roads for adaptive shapes
     const interRoads = new Map<string, RoadSegmentData[]>();
     for (const road of snapshot.roads) {
       if (!interRoads.has(road.fromId)) interRoads.set(road.fromId, []);
@@ -57,36 +81,32 @@ export class RoadRenderer {
       interRoads.get(road.toId)!.push(road);
     }
 
-    // Pre-compute intersection pad sizes so road segments can be trimmed
     const padSizes = new Map<string, number>();
     for (const inter of snapshot.intersections) {
-      const connectedRoads = interRoads.get(inter.id) ?? [];
-      padSizes.set(
-        inter.id,
-        this.computePadSize(connectedRoads, inter, interMap),
-      );
+      const cr = interRoads.get(inter.id) ?? [];
+      padSizes.set(inter.id, this.computePadSize(cr, inter, interMap));
     }
 
-    // Avoid drawing both directions of bi-directional roads
     const drawn = new Set<string>();
-
     for (const road of snapshot.roads) {
       const pairKey = [road.fromId, road.toId].sort().join("|");
       if (drawn.has(pairKey)) continue;
       drawn.add(pairKey);
-
       const from = interMap.get(road.fromId);
       const to = interMap.get(road.toId);
       if (!from || !to) continue;
-
-      const fromPad = padSizes.get(road.fromId) ?? 0;
-      const toPad = padSizes.get(road.toId) ?? 0;
-      this.addRoadSegment(from, to, road, fromPad, toPad);
+      this.addRoadSegment(
+        from,
+        to,
+        road,
+        padSizes.get(road.fromId) ?? 0,
+        padSizes.get(road.toId) ?? 0,
+      );
     }
 
     for (const inter of snapshot.intersections) {
-      const connectedRoads = interRoads.get(inter.id) ?? [];
-      this.addIntersection(inter, connectedRoads, interMap);
+      const cr = interRoads.get(inter.id) ?? [];
+      this.addIntersection(inter, cr, interMap);
     }
   }
 
@@ -96,40 +116,41 @@ export class RoadRenderer {
     interMap: Map<string, IntersectionData>,
   ): number {
     if (inter.type === "TUNNEL") return 0;
-    // Count unique neighbors: 2-way nodes are bends, not junctions — no pad
-    const uniqueNeighbors = new Set<string>();
-    for (const road of connectedRoads) {
-      const otherId = road.fromId === inter.id ? road.toId : road.fromId;
-      uniqueNeighbors.add(otherId);
+    const neighbors = new Set<string>();
+    for (const r of connectedRoads) {
+      neighbors.add(r.fromId === inter.id ? r.toId : r.fromId);
     }
-    if (uniqueNeighbors.size <= 2 && inter.type !== "SIGNAL") return 0;
-
-    const laneWidth = 3.7;
-    let maxWidth = 8;
-    for (const road of connectedRoads) {
-      let w: number;
-      switch (road.roadType) {
-        case "HIGHWAY":
-          w = road.lanes * 2 * laneWidth + 3 + 4;
-          break;
-        case "ARTERIAL":
-          w = road.lanes * 2 * laneWidth + 1.5 + 2;
-          break;
-        case "COLLECTOR":
-          w = road.lanes * 2 * laneWidth + 1 + 1;
-          break;
-        case "LOCAL":
-          w = road.lanes * 2 * laneWidth;
-          break;
-        default:
-          w = laneWidth * 1.5;
+    if (neighbors.size <= 1) return 0;
+    if (neighbors.size === 2 && inter.type !== "SIGNAL") {
+      const [id1, id2] = [...neighbors];
+      const n1 = interMap.get(id1),
+        n2 = interMap.get(id2);
+      if (n1 && n2) {
+        const dx1 = n1.x - inter.x,
+          dz1 = n1.y - inter.y;
+        const dx2 = n2.x - inter.x,
+          dz2 = n2.y - inter.y;
+        const cross = Math.abs(dx1 * dz2 - dz1 * dx2);
+        if (cross < 10 && dx1 * dx2 + dz1 * dz2 < 0) return 0;
       }
-      if (w > maxWidth) maxWidth = w;
+      let maxW = 4;
+      for (const r of connectedRoads) {
+        const w =
+          computeRoadWidth(r.roadType, r.lanes) +
+          computeShoulderWidth(r.roadType) * 2;
+        if (w > maxW) maxW = w;
+      }
+      return maxW * 0.55;
     }
-    return maxWidth * 0.7 + 2;
+    let maxW = 6;
+    for (const r of connectedRoads) {
+      const w =
+        computeRoadWidth(r.roadType, r.lanes) +
+        computeShoulderWidth(r.roadType) * 2;
+      if (w > maxW) maxW = w;
+    }
+    return maxW * 0.6 + 1;
   }
-
-  /* ── private helpers ─────────────── */
 
   private addRoadSegment(
     from: IntersectionData,
@@ -139,134 +160,332 @@ export class RoadRenderer {
     toPad: number,
   ): void {
     const sx = from.x,
-      sz = from.y; // server y → Three z
+      sz = from.y;
     const ex = to.x,
       ez = to.y;
+    const dx = ex - sx,
+      dz = ez - sz;
+    const fullLen = Math.sqrt(dx * dx + dz * dz);
+    if (fullLen < 0.1) return;
 
-    const dx = ex - sx;
-    const dz = ez - sz;
-    const fullLength = Math.sqrt(dx * dx + dz * dz);
-    if (fullLength < 0.1) return;
-
-    // Trim road segment so it doesn't overlap intersection pads
     const trimFrom = fromPad * 0.5;
     const trimTo = toPad * 0.5;
-    const length = Math.max(1, fullLength - trimFrom - trimTo);
-    const trimFrac = trimFrom / fullLength;
+    const length = Math.max(1, fullLen - trimFrom - trimTo);
 
-    // Check if this road crosses water cells → render as bridge
+    const dirX = dx / fullLen,
+      dirZ = dz / fullLen;
+    const tsx = sx + dirX * trimFrom,
+      tsz = sz + dirZ * trimFrom;
+    const tex = ex - dirX * trimTo,
+      tez = ez - dirZ * trimTo;
+    const midX = (tsx + tex) / 2,
+      midZ = (tsz + tez) / 2;
+
+    const rType = road.roadType;
+    const lanes = road.lanes;
+    const width = computeRoadWidth(rType, lanes);
+    const sw = computeShoulderWidth(rType);
+    const totalW = width + sw * 2;
+    const med = hasMedianDivider(rType, lanes);
+
     const isBridge = this.isOverWater(sx, sz, ex, ez);
     const bridgeHeight = 2.5;
-    const roadY = isBridge ? ROAD_Y + bridgeHeight : ROAD_Y;
 
-    // Trimmed segment endpoints (inset from intersection centers)
-    const dirX = dx / fullLength;
-    const dirZ = dz / fullLength;
-    const tsx = sx + dirX * trimFrom;
-    const tsz = sz + dirZ * trimFrom;
-    const tex = ex - dirX * (toPad * 0.5);
-    const tez = ez - dirZ * (toPad * 0.5);
-    const midX = (tsx + tex) / 2;
-    const midZ = (tsz + tez) / 2;
-
-    // US-standard road widths by type
-    const roadType = road.roadType;
-    const lanes = road.lanes;
-    const laneWidth = 3.7; // US standard lane width in game units
-    let width: number;
-    let hasMedian = false;
-    let shoulderWidth = 0;
-    switch (roadType) {
-      case "HIGHWAY":
-        width = lanes * 2 * laneWidth + 3; // both directions + median
-        hasMedian = true;
-        shoulderWidth = 2;
-        break;
-      case "ARTERIAL":
-        width = lanes * 2 * laneWidth + 1.5; // both directions + narrow median
-        hasMedian = lanes >= 2;
-        shoulderWidth = 1;
-        break;
-      case "COLLECTOR":
-        width = lanes * 2 * laneWidth + 1;
-        shoulderWidth = 0.5;
-        break;
-      case "LOCAL":
-        width = lanes * 2 * laneWidth;
-        break;
-      case "PATH":
-        width = laneWidth * 1.5; // narrow unpaved
-        break;
-      default:
-        width = lanes * 5 + 2;
+    if (isBridge) {
+      this.renderBridge(
+        tsx,
+        tsz,
+        tex,
+        tez,
+        dx,
+        dz,
+        fullLen,
+        length,
+        totalW,
+        width,
+        sw,
+        rType,
+        lanes,
+        med,
+        bridgeHeight,
+      );
+    } else {
+      const colour = ROAD_COLOURS[rType] ?? 0x707070;
+      this.renderRoadSurface(
+        midX,
+        midZ,
+        ROAD_Y,
+        totalW,
+        length,
+        dx,
+        dz,
+        colour,
+      );
+      this.renderMarkings(
+        tsx,
+        tsz,
+        tex,
+        tez,
+        midX,
+        midZ,
+        ROAD_Y,
+        length,
+        dx,
+        dz,
+        fullLen,
+        rType,
+        lanes,
+        width,
+        sw,
+        med,
+      );
     }
+  }
 
-    const geo = new THREE.BoxGeometry(
-      width + shoulderWidth * 2,
-      ROAD_THICKNESS,
-      length,
-    );
-    const colour = isBridge ? 0x909090 : (ROAD_COLOURS[roadType] ?? 0x707070);
+  private renderRoadSurface(
+    mx: number,
+    mz: number,
+    y: number,
+    w: number,
+    len: number,
+    dx: number,
+    dz: number,
+    colour: number,
+  ): void {
+    const geo = new THREE.BoxGeometry(w, ROAD_THICKNESS, len);
     const mat = new THREE.MeshLambertMaterial({ color: colour });
-
     const mesh = new THREE.Mesh(geo, mat);
     mesh.receiveShadow = true;
-    mesh.position.set(midX, roadY, midZ);
+    mesh.position.set(mx, y, mz);
     mesh.rotation.y = Math.atan2(dx, dz);
     this.group.add(mesh);
+  }
 
-    // ── Bridge ramps ──
-    if (isBridge) {
-      const rampLen = 16;
-      for (const sign of [-1, 1]) {
-        const cx2 = sign === -1 ? tsx : tex;
-        const cz2 = sign === -1 ? tsz : tez;
-        const rampGeo = new THREE.BoxGeometry(
-          width + shoulderWidth * 2,
-          ROAD_THICKNESS,
-          rampLen,
-        );
-        const rampMat = new THREE.MeshLambertMaterial({ color: 0x808080 });
-        const ramp = new THREE.Mesh(rampGeo, rampMat);
-        ramp.receiveShadow = true;
-        ramp.position.set(
-          cx2 - dirX * rampLen * 0.5 * sign,
-          ROAD_Y + bridgeHeight / 2,
-          cz2 - dirZ * rampLen * 0.5 * sign,
-        );
-        ramp.rotation.y = Math.atan2(dx, dz);
-        ramp.rotation.x = sign * Math.atan2(bridgeHeight, rampLen);
-        this.group.add(ramp);
-      }
+  private renderBridge(
+    tsx: number,
+    tsz: number,
+    tex: number,
+    tez: number,
+    dx: number,
+    dz: number,
+    fullLen: number,
+    length: number,
+    totalW: number,
+    width: number,
+    sw: number,
+    rType: string,
+    lanes: number,
+    med: boolean,
+    bridgeHeight: number,
+  ): void {
+    const nx = -dz / fullLen,
+      nz = dx / fullLen;
+    const dirX = dx / fullLen,
+      dirZ = dz / fullLen;
+    const deckY = ROAD_Y + bridgeHeight;
+    const rampFrac = 0.18; // fraction of length used for each ramp
+
+    // Build one continuous mesh from start to end using vertex interpolation.
+    // Segments: rampFrac → flat → (1-rampFrac). Heights interpolated smoothly.
+    const SEGS = 20; // subdivisions along bridge length
+    const halfW = totalW / 2;
+    const th = ROAD_THICKNESS;
+
+    const positions: number[] = [];
+    const indices: number[] = [];
+
+    // Height profile: ramp up over first rampFrac, flat in middle, ramp down in last rampFrac
+    function heightAt(t: number): number {
+      if (t < rampFrac) return ROAD_Y + bridgeHeight * (t / rampFrac);
+      if (t > 1 - rampFrac) return ROAD_Y + bridgeHeight * ((1 - t) / rampFrac);
+      return deckY;
     }
 
-    const nx = -dz / fullLength;
-    const nz = dx / fullLength;
+    // Generate a quad strip: for each segment cross-section, 4 vertices
+    //   top-left, top-right, bottom-left, bottom-right
+    for (let i = 0; i <= SEGS; i++) {
+      const t = i / SEGS;
+      // World position along the bridge centre-line
+      const cx = tsx + (tex - tsx) * t;
+      const cz = tsz + (tez - tsz) * t;
+      const topY = heightAt(t);
+      const botY = topY - th;
+
+      // Left edge (negative normal direction)
+      positions.push(cx - nx * halfW, topY, cz - nz * halfW); // 0: top-left
+      positions.push(cx + nx * halfW, topY, cz + nz * halfW); // 1: top-right
+      positions.push(cx - nx * halfW, botY, cz - nz * halfW); // 2: bot-left
+      positions.push(cx + nx * halfW, botY, cz + nz * halfW); // 3: bot-right
+    }
+
+    // Build faces between consecutive cross-sections
+    for (let i = 0; i < SEGS; i++) {
+      const b = i * 4;
+      const n = b + 4;
+      // Top face
+      indices.push(b, b + 1, n + 1, b, n + 1, n);
+      // Bottom face (reversed winding)
+      indices.push(b + 2, n + 2, n + 3, b + 2, n + 3, b + 3);
+      // Left side
+      indices.push(b, n, n + 2, b, n + 2, b + 2);
+      // Right side
+      indices.push(b + 1, b + 3, n + 3, b + 1, n + 3, n + 1);
+    }
+    // Start cap
+    indices.push(0, 2, 3, 0, 3, 1);
+    // End cap
+    const last = SEGS * 4;
+    indices.push(last, last + 1, last + 3, last, last + 3, last + 2);
+
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute(
+      "position",
+      new THREE.BufferAttribute(new Float32Array(positions), 3),
+    );
+    geo.setIndex(indices);
+    geo.computeVertexNormals();
+
+    const colour = ROAD_COLOURS[rType] ?? 0x808080;
+    const mat = new THREE.MeshLambertMaterial({ color: colour });
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.receiveShadow = true;
+    mesh.castShadow = true;
+    this.group.add(mesh);
+
+    // Lane markings on flat deck section
+    const flatMidX = (tsx + tex) / 2;
+    const flatMidZ = (tsz + tez) / 2;
+    const flatLen = length * (1 - 2 * rampFrac);
+    this.renderMarkings(
+      tsx,
+      tsz,
+      tex,
+      tez,
+      flatMidX,
+      flatMidZ,
+      deckY,
+      flatLen,
+      dx,
+      dz,
+      fullLen,
+      rType,
+      lanes,
+      width,
+      sw,
+      med,
+    );
+
+    // Railings — placed as thin vertical boxes riding the height profile
+    for (const side of [-1, 1]) {
+      const railOff = (halfW + 0.15) * side;
+      const railPositions: number[] = [];
+      const railIndices: number[] = [];
+      for (let i = 0; i <= SEGS; i++) {
+        const t = i / SEGS;
+        const cx = tsx + (tex - tsx) * t;
+        const cz = tsz + (tez - tsz) * t;
+        const topY = heightAt(t);
+        railPositions.push(
+          cx + nx * railOff - dirX * 0.15,
+          topY + 1.0,
+          cz + nz * railOff - dirZ * 0.15,
+          cx + nx * railOff + dirX * 0.15,
+          topY + 1.0,
+          cz + nz * railOff + dirZ * 0.15,
+          cx + nx * railOff - dirX * 0.15,
+          topY,
+          cz + nz * railOff - dirZ * 0.15,
+          cx + nx * railOff + dirX * 0.15,
+          topY,
+          cz + nz * railOff + dirZ * 0.15,
+        );
+        if (i < SEGS) {
+          const rb = i * 4,
+            rn = rb + 4;
+          railIndices.push(rb, rn, rn + 1, rb, rn + 1, rb + 1);
+          railIndices.push(rb + 2, rb + 3, rn + 3, rb + 2, rn + 3, rn + 2);
+          railIndices.push(rb, rb + 2, rn + 2, rb, rn + 2, rn);
+          railIndices.push(rb + 1, rn + 1, rn + 3, rb + 1, rn + 3, rb + 3);
+        }
+      }
+      const railGeo = new THREE.BufferGeometry();
+      railGeo.setAttribute(
+        "position",
+        new THREE.BufferAttribute(new Float32Array(railPositions), 3),
+      );
+      railGeo.setIndex(railIndices);
+      railGeo.computeVertexNormals();
+      const railMesh = new THREE.Mesh(
+        railGeo,
+        new THREE.MeshLambertMaterial({ color: 0x999999 }),
+      );
+      railMesh.castShadow = true;
+      this.group.add(railMesh);
+    }
+
+    // Support pillars under the flat section
+    const pillarCount = Math.max(1, Math.floor(flatLen / 30));
+    for (let i = 0; i <= pillarCount; i++) {
+      const t = rampFrac + (1 - 2 * rampFrac) * (i / Math.max(pillarCount, 1));
+      const px = tsx + (tex - tsx) * t;
+      const pz = tsz + (tez - tsz) * t;
+      for (const side of [-0.35, 0.35]) {
+        const pilH = deckY + 0.5;
+        const pilGeo = new THREE.BoxGeometry(0.8, pilH, 0.8);
+        const pil = new THREE.Mesh(
+          pilGeo,
+          new THREE.MeshLambertMaterial({ color: 0x888888 }),
+        );
+        pil.position.set(
+          px + nx * totalW * side,
+          pilH / 2 - 0.5,
+          pz + nz * totalW * side,
+        );
+        pil.castShadow = true;
+        this.group.add(pil);
+      }
+    }
+  }
+
+  private renderMarkings(
+    tsx: number,
+    tsz: number,
+    tex: number,
+    tez: number,
+    midX: number,
+    midZ: number,
+    roadY: number,
+    len: number,
+    dx: number,
+    dz: number,
+    fullLen: number,
+    rType: string,
+    lanes: number,
+    width: number,
+    sw: number,
+    med: boolean,
+  ): void {
+    const nx = -dz / fullLen,
+      nz = dx / fullLen;
     const markY = roadY + ROAD_THICKNESS / 2 + 0.04;
 
-    // ── Center line (varies by road type) ──
-    if (roadType === "HIGHWAY" || roadType === "ARTERIAL") {
-      // Double yellow center line (no passing)
-      for (const off of [-0.3, 0.3]) {
-        const cGeo = new THREE.BoxGeometry(0.2, 0.06, length * 0.92);
+    if (rType === "HIGHWAY" || rType === "ARTERIAL") {
+      for (const off of [-0.12, 0.12]) {
+        const cGeo = new THREE.BoxGeometry(0.1, 0.04, len * 0.92);
         const cMat = new THREE.MeshBasicMaterial({ color: 0xddaa00 });
         const cLine = new THREE.Mesh(cGeo, cMat);
         cLine.position.set(midX + nx * off, markY, midZ + nz * off);
         cLine.rotation.y = Math.atan2(dx, dz);
         this.group.add(cLine);
       }
-    } else if (roadType === "PATH") {
-      // No center markings for paths
-    } else {
-      // Dashed white center line
-      const dashCount = Math.max(1, Math.floor(length / 8));
-      const dashLen = (length * 0.85) / dashCount;
-      for (let i = 0; i < dashCount; i++) {
-        if (i % 2 === 1) continue; // every other dash
+    } else if (rType !== "PATH") {
+      const dashCount = Math.max(1, Math.floor(len / 5));
+      const dashLen = (len * 0.85) / dashCount;
+      for (let i = 0; i < dashCount; i += 2) {
         const t = (i + 0.5) / dashCount;
-        const dpx = tsx + (tex - tsx) * t;
-        const dpz = tsz + (tez - tsz) * t;
-        const dGeo = new THREE.BoxGeometry(0.2, 0.06, dashLen * 0.6);
+        const dpx = tsx + (tex - tsx) * t,
+          dpz = tsz + (tez - tsz) * t;
+        const dGeo = new THREE.BoxGeometry(0.1, 0.04, dashLen * 0.55);
         const dMat = new THREE.MeshBasicMaterial({ color: 0xeeeeee });
         const dash = new THREE.Mesh(dGeo, dMat);
         dash.position.set(dpx, markY, dpz);
@@ -275,19 +494,18 @@ export class RoadRenderer {
       }
     }
 
-    // ── Lane divider lines (between lanes on each side) ──
-    if (lanes > 1 && roadType !== "PATH") {
+    if (lanes > 1 && rType !== "PATH") {
+      const medOff = med ? 0.5 : 0;
       for (let l = 1; l < lanes; l++) {
-        const laneOff = laneWidth * l;
+        const laneOff = LANE_WIDTH * l + medOff;
         for (const side of [-1, 1]) {
-          const offset = (hasMedian ? 1.5 : 0.5) + laneOff;
-          const lGeo = new THREE.BoxGeometry(0.15, 0.05, length * 0.85);
+          const lGeo = new THREE.BoxGeometry(0.08, 0.04, len * 0.85);
           const lMat = new THREE.MeshBasicMaterial({ color: 0xdddddd });
           const lLine = new THREE.Mesh(lGeo, lMat);
           lLine.position.set(
-            midX + nx * offset * side,
+            midX + nx * laneOff * side,
             markY,
-            midZ + nz * offset * side,
+            midZ + nz * laneOff * side,
           );
           lLine.rotation.y = Math.atan2(dx, dz);
           this.group.add(lLine);
@@ -295,42 +513,36 @@ export class RoadRenderer {
       }
     }
 
-    // ── Median divider for highways ──
-    if (hasMedian && roadType === "HIGHWAY") {
-      const medGeo = new THREE.BoxGeometry(1.0, 0.3, length);
+    if (med && rType === "HIGHWAY") {
+      const medGeo = new THREE.BoxGeometry(0.5, 0.2, len);
       const medMat = new THREE.MeshLambertMaterial({ color: 0x555555 });
       const median = new THREE.Mesh(medGeo, medMat);
-      median.position.set(midX, roadY + 0.15, midZ);
+      median.position.set(midX, roadY + 0.1, midZ);
       median.rotation.y = Math.atan2(dx, dz);
       this.group.add(median);
     }
 
-    // ── Edge lines (solid white) ──
-    if (roadType !== "PATH") {
-      const edgeOffset = (width + shoulderWidth * 2) / 2 - 0.3;
+    if (rType !== "PATH") {
+      const totalW = width + sw * 2;
+      const edgeOff = totalW / 2 - 0.1;
       for (const side of [-1, 1]) {
-        const eGeo = new THREE.BoxGeometry(0.2, 0.06, length * 0.95);
+        const eGeo = new THREE.BoxGeometry(0.1, 0.04, len * 0.95);
         const eMat = new THREE.MeshBasicMaterial({ color: 0xeeeeee });
-        const edge = new THREE.Mesh(eGeo, eMat);
-        edge.position.set(
-          midX + nx * edgeOffset * side,
+        const eLine = new THREE.Mesh(eGeo, eMat);
+        eLine.position.set(
+          midX + nx * edgeOff * side,
           markY,
-          midZ + nz * edgeOffset * side,
+          midZ + nz * edgeOff * side,
         );
-        edge.rotation.y = Math.atan2(dx, dz);
-        this.group.add(edge);
+        eLine.rotation.y = Math.atan2(dx, dz);
+        this.group.add(eLine);
       }
     }
 
-    // ── Shoulder gravel strips for highways/arterials ──
-    if (shoulderWidth > 0.5 && roadType !== "PATH") {
+    if (sw > 0) {
       for (const side of [-1, 1]) {
-        const sOff = (width / 2 + shoulderWidth * 0.5) * side;
-        const sGeo = new THREE.BoxGeometry(
-          shoulderWidth,
-          ROAD_THICKNESS * 0.8,
-          length,
-        );
+        const sOff = (width / 2 + sw * 0.5) * side;
+        const sGeo = new THREE.BoxGeometry(sw, ROAD_THICKNESS * 0.8, len);
         const sMat = new THREE.MeshLambertMaterial({ color: 0x888880 });
         const shoulder = new THREE.Mesh(sGeo, sMat);
         shoulder.position.set(midX + nx * sOff, roadY - 0.02, midZ + nz * sOff);
@@ -338,114 +550,43 @@ export class RoadRenderer {
         this.group.add(shoulder);
       }
     }
-
-    // Bridge railings and support pillars
-    if (isBridge) {
-      this.addBridgeDetails(
-        tsx,
-        tsz,
-        tex,
-        tez,
-        width + shoulderWidth * 2,
-        roadY,
-        length,
-        dx,
-        dz,
-      );
-    }
   }
 
-  /** Check if road segment midpoint is over water terrain */
   private isOverWater(sx: number, sz: number, ex: number, ez: number): boolean {
     if (!this.terrain) return false;
-    const W = this.terrain.length;
-    const D = this.terrain[0]?.length ?? 0;
-
-    // Sample points along the road and check neighboring cells for water
+    const W = this.terrain.length,
+      D = this.terrain[0]?.length ?? 0;
     const steps = Math.max(
       3,
       Math.floor(Math.sqrt((ex - sx) ** 2 + (ez - sz) ** 2) / 16),
     );
-    let waterAdjacentCount = 0;
+    let waterCount = 0;
     for (let i = 0; i <= steps; i++) {
       const t = i / steps;
-      const px = sx + (ex - sx) * t;
-      const pz = sz + (ez - sz) * t;
-      const gx = Math.floor(px / 16);
-      const gz = Math.floor(pz / 16);
-      // Check this cell and its 4 neighbors for water
-      for (const [dx, dz2] of [
+      const gx = Math.floor((sx + (ex - sx) * t) / 16);
+      const gz = Math.floor((sz + (ez - sz) * t) / 16);
+      for (const [ddx, ddz] of [
         [0, 0],
         [1, 0],
         [-1, 0],
         [0, 1],
         [0, -1],
       ] as const) {
-        const nx = gx + dx;
-        const nz = gz + dz2;
-        if (nx >= 0 && nx < W && nz >= 0 && nz < D) {
-          if (this.terrain[nx][nz] === 0) {
-            waterAdjacentCount++;
-            break;
-          }
+        const cx = gx + ddx,
+          cz = gz + ddz;
+        if (
+          cx >= 0 &&
+          cx < W &&
+          cz >= 0 &&
+          cz < D &&
+          this.terrain[cx][cz] === 0
+        ) {
+          waterCount++;
+          break;
         }
       }
     }
-    return waterAdjacentCount >= 2;
-  }
-
-  /** Add bridge railings and support pillars */
-  private addBridgeDetails(
-    sx: number,
-    sz: number,
-    ex: number,
-    ez: number,
-    width: number,
-    roadY: number,
-    length: number,
-    dx: number,
-    dz: number,
-  ): void {
-    const nx = -dz / Math.sqrt(dx * dx + dz * dz);
-    const nz = dx / Math.sqrt(dx * dx + dz * dz);
-
-    // Side railings
-    for (const side of [-1, 1]) {
-      const railOffset = (width / 2 + 0.3) * side;
-      const railGeo = new THREE.BoxGeometry(0.6, 1.5, length);
-      const railMat = new THREE.MeshLambertMaterial({ color: 0x888888 });
-      const rail = new THREE.Mesh(railGeo, railMat);
-      rail.position.set(
-        (sx + ex) / 2 + nx * railOffset,
-        roadY + 0.75,
-        (sz + ez) / 2 + nz * railOffset,
-      );
-      rail.rotation.y = Math.atan2(dx, dz);
-      rail.castShadow = true;
-      this.group.add(rail);
-    }
-
-    // Support pillars underneath the bridge
-    const pillarSpacing = 32;
-    const numPillars = Math.max(1, Math.floor(length / pillarSpacing));
-    for (let i = 0; i <= numPillars; i++) {
-      const t = numPillars === 0 ? 0.5 : i / numPillars;
-      const px = sx + dx * t;
-      const pz = sz + dz * t;
-
-      for (const side of [-0.3, 0.3]) {
-        const pillarGeo = new THREE.BoxGeometry(1.5, roadY + 2, 1.5);
-        const pillarMat = new THREE.MeshLambertMaterial({ color: 0x777777 });
-        const pillar = new THREE.Mesh(pillarGeo, pillarMat);
-        pillar.position.set(
-          px + nx * width * side,
-          (roadY + 2) / 2 - 2,
-          pz + nz * width * side,
-        );
-        pillar.castShadow = true;
-        this.group.add(pillar);
-      }
-    }
+    return waterCount >= 2;
   }
 
   private addIntersection(
@@ -455,127 +596,56 @@ export class RoadRenderer {
   ): void {
     const isSignal = inter.type === "SIGNAL";
     const isTunnel = inter.type === "TUNNEL";
-    const x = inter.x;
-    const z = inter.y; // server y → Three z
+    const x = inter.x,
+      z = inter.y;
 
-    // Count unique connected nodes to determine true junction degree
-    const uniqueNeighbors = new Set<string>();
-    for (const road of connectedRoads) {
-      const otherId = road.fromId === inter.id ? road.toId : road.fromId;
-      uniqueNeighbors.add(otherId);
+    const neighbors = new Set<string>();
+    for (const r of connectedRoads) {
+      neighbors.add(r.fromId === inter.id ? r.toId : r.fromId);
     }
-    // Skip rendering pads for 2-way nodes (bends/straight-throughs) —
-    // just let the road segments connect through. Tunnels always render.
-    if (uniqueNeighbors.size <= 2 && !isTunnel && !isSignal) return;
+
+    if (neighbors.size <= 1 && !isTunnel && !isSignal) return;
+
+    if (neighbors.size === 2 && !isTunnel && !isSignal) {
+      const [id1, id2] = [...neighbors];
+      const n1 = interMap.get(id1),
+        n2 = interMap.get(id2);
+      if (n1 && n2) {
+        const dx1 = n1.x - x,
+          dz1 = n1.y - z;
+        const dx2 = n2.x - x,
+          dz2 = n2.y - z;
+        const cross = Math.abs(dx1 * dz2 - dz1 * dx2);
+        if (cross < 10 && dx1 * dx2 + dz1 * dz2 < 0) return;
+
+        this.renderBendCurve(x, z, n1, n2, connectedRoads);
+        return;
+      }
+    }
 
     if (isTunnel) {
-      // ── Proper tunnel entrance: stone arch carved into mountainside ──
-      const tunnelW = 18; // road width through tunnel
-      const tunnelH = 16; // arch height
-      const tunnelD = 20; // depth into mountain
-
-      // Stone surround (the mountain face around the tunnel)
-      const surroundW = tunnelW + 12;
-      const surroundH = tunnelH + 10;
-      const surroundD = tunnelD + 4;
-      const surroundGeo = new THREE.BoxGeometry(
-        surroundW,
-        surroundH,
-        surroundD,
-      );
-      const surroundMat = new THREE.MeshLambertMaterial({ color: 0x6b6358 });
-      const surround = new THREE.Mesh(surroundGeo, surroundMat);
-      surround.position.set(x, surroundH / 2, z);
-      surround.castShadow = true;
-      this.group.add(surround);
-
-      // Arch opening — semi-circular top using cylinder segment
-      const archRadius = tunnelW / 2;
-      const archGeo = new THREE.CylinderGeometry(
-        archRadius,
-        archRadius,
-        tunnelD + 2,
-        16,
-        1,
-        false,
-        0,
-        Math.PI,
-      );
-      const archMat = new THREE.MeshLambertMaterial({ color: 0x111111 });
-      const arch = new THREE.Mesh(archGeo, archMat);
-      arch.rotation.x = Math.PI / 2;
-      arch.rotation.z = Math.PI / 2;
-      arch.position.set(x, tunnelH - archRadius + 1, z);
-      this.group.add(arch);
-
-      // Rectangular lower opening
-      const openH = tunnelH - archRadius;
-      const openGeo = new THREE.BoxGeometry(tunnelW, openH, tunnelD + 2);
-      const openMat = new THREE.MeshLambertMaterial({ color: 0x111111 });
-      const opening = new THREE.Mesh(openGeo, openMat);
-      opening.position.set(x, openH / 2, z);
-      this.group.add(opening);
-
-      // Stone keystone accent at arch top
-      const keystoneGeo = new THREE.BoxGeometry(4, 3, tunnelD / 2);
-      const keystoneMat = new THREE.MeshLambertMaterial({ color: 0x554a3f });
-      const keystone = new THREE.Mesh(keystoneGeo, keystoneMat);
-      keystone.position.set(x, tunnelH + 1, z);
-      keystone.castShadow = true;
-      this.group.add(keystone);
-
-      // Road surface through tunnel
-      const roadGeo = new THREE.BoxGeometry(tunnelW - 2, 0.3, tunnelD + 8);
-      const roadMat = new THREE.MeshLambertMaterial({ color: 0x505050 });
-      const road = new THREE.Mesh(roadGeo, roadMat);
-      road.position.set(x, ROAD_Y, z);
-      road.receiveShadow = true;
-      this.group.add(road);
+      this.renderTunnel(x, z);
       return;
     }
 
-    // Adaptive intersection pad — compute size from connected road widths
-    const laneWidth = 3.7;
-    let maxWidth = 8; // minimum pad size
     const roadDirs: { dx: number; dz: number; width: number }[] = [];
-
-    for (const road of connectedRoads) {
-      // Find the other end of this road
-      const otherId = road.fromId === inter.id ? road.toId : road.fromId;
+    let maxW = 6;
+    for (const r of connectedRoads) {
+      const otherId = r.fromId === inter.id ? r.toId : r.fromId;
       const other = interMap.get(otherId);
       if (!other) continue;
-
-      const ox = other.x;
-      const oz = other.y;
-      const ddx = ox - x;
-      const ddz = oz - z;
+      const ddx = other.x - x,
+        ddz = other.y - z;
       const len = Math.sqrt(ddx * ddx + ddz * ddz);
       if (len < 0.1) continue;
-
-      let w: number;
-      switch (road.roadType) {
-        case "HIGHWAY":
-          w = road.lanes * 2 * laneWidth + 3 + 4;
-          break;
-        case "ARTERIAL":
-          w = road.lanes * 2 * laneWidth + 1.5 + 2;
-          break;
-        case "COLLECTOR":
-          w = road.lanes * 2 * laneWidth + 1 + 1;
-          break;
-        case "LOCAL":
-          w = road.lanes * 2 * laneWidth;
-          break;
-        default:
-          w = laneWidth * 1.5;
-      }
-
+      const w =
+        computeRoadWidth(r.roadType, r.lanes) +
+        computeShoulderWidth(r.roadType) * 2;
       roadDirs.push({ dx: ddx / len, dz: ddz / len, width: w });
-      if (w > maxWidth) maxWidth = w;
+      if (w > maxW) maxW = w;
     }
 
-    // Use box geometry for intersection pad to smoothly cover all road widths
-    const padSize = maxWidth * 0.7 + 2;
+    const padSize = maxW * 0.6 + 1;
     const padGeo = new THREE.BoxGeometry(padSize, ROAD_THICKNESS, padSize);
     const padMat = new THREE.MeshLambertMaterial({ color: 0x555555 });
     const pad = new THREE.Mesh(padGeo, padMat);
@@ -583,9 +653,8 @@ export class RoadRenderer {
     pad.receiveShadow = true;
     this.group.add(pad);
 
-    // Add road-width transition flares for each connected road
     for (const rd of roadDirs) {
-      const flareLen = padSize * 0.6;
+      const flareLen = padSize * 0.5;
       const flareGeo = new THREE.BoxGeometry(
         rd.width,
         ROAD_THICKNESS,
@@ -603,155 +672,272 @@ export class RoadRenderer {
       this.group.add(flare);
     }
 
-    const isStop = inter.type === "STOP";
-    const isYield = inter.type === "YIELD";
+    this.renderIntersectionControl(inter, x, z, padSize, roadDirs);
+  }
 
-    if (isStop) {
-      // ── STOP sign: red octagonal sign on a pole ──
-      for (const corner of [
-        [4.5, 4.5],
-        [-4.5, -4.5],
-      ]) {
-        const poleGeo = new THREE.CylinderGeometry(0.15, 0.15, 8, 5);
-        const poleMat = new THREE.MeshLambertMaterial({ color: 0x888888 });
-        const pole = new THREE.Mesh(poleGeo, poleMat);
-        pole.position.set(x + corner[0], ROAD_Y + 4, z + corner[1]);
+  private renderBendCurve(
+    x: number,
+    z: number,
+    n1: IntersectionData,
+    n2: IntersectionData,
+    connectedRoads: RoadSegmentData[],
+  ): void {
+    let maxW = 4;
+    let rType = "LOCAL";
+    for (const r of connectedRoads) {
+      const w =
+        computeRoadWidth(r.roadType, r.lanes) +
+        computeShoulderWidth(r.roadType) * 2;
+      if (w > maxW) {
+        maxW = w;
+        rType = r.roadType;
+      }
+    }
+    const colour = ROAD_COLOURS[rType] ?? 0x707070;
+
+    const d1x = n1.x - x,
+      d1z = n1.y - z;
+    const d2x = n2.x - x,
+      d2z = n2.y - z;
+    const l1 = Math.sqrt(d1x * d1x + d1z * d1z);
+    const l2 = Math.sqrt(d2x * d2x + d2z * d2z);
+    if (l1 < 1 || l2 < 1) return;
+
+    const arcSegments = 8;
+    const radius = maxW * 0.5;
+    const p0x = x + (d1x / l1) * radius,
+      p0z = z + (d1z / l1) * radius;
+    const p2x = x + (d2x / l2) * radius,
+      p2z = z + (d2z / l2) * radius;
+    const p1x = x,
+      p1z = z;
+
+    for (let i = 0; i < arcSegments; i++) {
+      const t0 = i / arcSegments,
+        t1 = (i + 1) / arcSegments;
+      const ax =
+        (1 - t0) * (1 - t0) * p0x + 2 * (1 - t0) * t0 * p1x + t0 * t0 * p2x;
+      const az =
+        (1 - t0) * (1 - t0) * p0z + 2 * (1 - t0) * t0 * p1z + t0 * t0 * p2z;
+      const bx =
+        (1 - t1) * (1 - t1) * p0x + 2 * (1 - t1) * t1 * p1x + t1 * t1 * p2x;
+      const bz =
+        (1 - t1) * (1 - t1) * p0z + 2 * (1 - t1) * t1 * p1z + t1 * t1 * p2z;
+      const segDx = bx - ax,
+        segDz = bz - az;
+      const segLen = Math.sqrt(segDx * segDx + segDz * segDz);
+      if (segLen < 0.01) continue;
+
+      const segGeo = new THREE.BoxGeometry(maxW, ROAD_THICKNESS, segLen + 0.3);
+      const segMat = new THREE.MeshLambertMaterial({ color: colour });
+      const seg = new THREE.Mesh(segGeo, segMat);
+      seg.position.set((ax + bx) / 2, ROAD_Y, (az + bz) / 2);
+      seg.rotation.y = Math.atan2(segDx, segDz);
+      seg.receiveShadow = true;
+      this.group.add(seg);
+    }
+
+    const padGeo = new THREE.BoxGeometry(
+      maxW * 0.7,
+      ROAD_THICKNESS,
+      maxW * 0.7,
+    );
+    const padMat = new THREE.MeshLambertMaterial({ color: colour });
+    const pad = new THREE.Mesh(padGeo, padMat);
+    pad.position.set(x, ROAD_Y, z);
+    pad.receiveShadow = true;
+    this.group.add(pad);
+  }
+
+  private renderTunnel(x: number, z: number): void {
+    const tunnelW = 12,
+      tunnelH = 10,
+      tunnelD = 14;
+    const sW = tunnelW + 6,
+      sH = tunnelH + 6,
+      sD = tunnelD + 3;
+
+    const surGeo = new THREE.BoxGeometry(sW, sH, sD);
+    const surMat = new THREE.MeshLambertMaterial({ color: 0x6b6358 });
+    const sur = new THREE.Mesh(surGeo, surMat);
+    sur.position.set(x, sH / 2, z);
+    sur.castShadow = true;
+    this.group.add(sur);
+
+    const aR = tunnelW / 2;
+    const aGeo = new THREE.CylinderGeometry(
+      aR,
+      aR,
+      tunnelD + 2,
+      12,
+      1,
+      false,
+      0,
+      Math.PI,
+    );
+    const aMat = new THREE.MeshLambertMaterial({ color: 0x111111 });
+    const arch = new THREE.Mesh(aGeo, aMat);
+    arch.rotation.x = Math.PI / 2;
+    arch.rotation.z = Math.PI / 2;
+    arch.position.set(x, tunnelH - aR + 1, z);
+    this.group.add(arch);
+
+    const oH = tunnelH - aR;
+    const oGeo = new THREE.BoxGeometry(tunnelW, oH, tunnelD + 2);
+    const oMat = new THREE.MeshLambertMaterial({ color: 0x111111 });
+    const open = new THREE.Mesh(oGeo, oMat);
+    open.position.set(x, oH / 2, z);
+    this.group.add(open);
+
+    const rGeo = new THREE.BoxGeometry(tunnelW - 1, 0.3, tunnelD + 5);
+    const rMat = new THREE.MeshLambertMaterial({ color: 0x505050 });
+    const rd = new THREE.Mesh(rGeo, rMat);
+    rd.position.set(x, ROAD_Y, z);
+    rd.receiveShadow = true;
+    this.group.add(rd);
+  }
+
+  private renderIntersectionControl(
+    inter: IntersectionData,
+    x: number,
+    z: number,
+    padSize: number,
+    roadDirs: { dx: number; dz: number; width: number }[],
+  ): void {
+    if (inter.type === "STOP") {
+      const markY = ROAD_Y + ROAD_THICKNESS / 2 + 0.04;
+      for (const rd of roadDirs) {
+        const perpX = -rd.dz,
+          perpZ = rd.dx;
+        const dist = padSize * 0.5 + 0.5;
+        const sideOff = rd.width * 0.5 + 0.8;
+        const sx = x - rd.dx * dist + perpX * sideOff;
+        const sz = z - rd.dz * dist + perpZ * sideOff;
+
+        const pGeo = new THREE.CylinderGeometry(0.1, 0.1, 4.5, 5);
+        const pMat = new THREE.MeshLambertMaterial({ color: 0x888888 });
+        const pole = new THREE.Mesh(pGeo, pMat);
+        pole.position.set(sx, ROAD_Y + 2.25, sz);
         pole.castShadow = true;
         this.group.add(pole);
 
-        // Red sign face
-        const signGeo = new THREE.CylinderGeometry(1.2, 1.2, 0.3, 8);
-        const signMat = new THREE.MeshLambertMaterial({ color: 0xcc0000 });
-        const sign = new THREE.Mesh(signGeo, signMat);
-        sign.position.set(x + corner[0], ROAD_Y + 8.5, z + corner[1]);
+        const sGeo = new THREE.CylinderGeometry(0.6, 0.6, 0.15, 8);
+        const sMat = new THREE.MeshLambertMaterial({ color: 0xcc0000 });
+        const sign = new THREE.Mesh(sGeo, sMat);
+        sign.position.set(sx, ROAD_Y + 5, sz);
+        sign.rotation.x = Math.PI / 2;
         sign.castShadow = true;
         this.group.add(sign);
 
-        // White border ring
-        const borderGeo = new THREE.TorusGeometry(1.2, 0.12, 4, 8);
-        const borderMat = new THREE.MeshLambertMaterial({ color: 0xffffff });
-        const border = new THREE.Mesh(borderGeo, borderMat);
-        border.position.set(x + corner[0], ROAD_Y + 8.5, z + corner[1]);
-        border.rotation.x = Math.PI / 2;
-        this.group.add(border);
+        const lGeo = new THREE.BoxGeometry(rd.width * 0.65, 0.05, 0.3);
+        const lMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+        const line = new THREE.Mesh(lGeo, lMat);
+        line.position.set(
+          x - rd.dx * padSize * 0.35,
+          markY,
+          z - rd.dz * padSize * 0.35,
+        );
+        line.rotation.y = Math.atan2(rd.dx, rd.dz);
+        this.group.add(line);
       }
-
-      // White stop line on road
-      const lineGeo = new THREE.BoxGeometry(10, 0.08, 0.6);
-      const lineMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
-      const line = new THREE.Mesh(lineGeo, lineMat);
-      line.position.set(x, ROAD_Y + ROAD_THICKNESS / 2 + 0.04, z + 3);
-      this.group.add(line);
     }
 
-    if (isYield) {
-      // ── YIELD sign: inverted triangle on a pole ──
-      for (const corner of [[4.5, 0]]) {
-        const poleGeo = new THREE.CylinderGeometry(0.15, 0.15, 7, 5);
-        const poleMat = new THREE.MeshLambertMaterial({ color: 0x888888 });
-        const pole = new THREE.Mesh(poleGeo, poleMat);
-        pole.position.set(x + corner[0], ROAD_Y + 3.5, z + corner[1]);
+    if (inter.type === "YIELD") {
+      for (const rd of roadDirs) {
+        const perpX = -rd.dz,
+          perpZ = rd.dx;
+        const dist = padSize * 0.5 + 0.5;
+        const sideOff = rd.width * 0.5 + 0.8;
+        const sx = x - rd.dx * dist + perpX * sideOff;
+        const sz = z - rd.dz * dist + perpZ * sideOff;
+
+        const pGeo = new THREE.CylinderGeometry(0.1, 0.1, 4.5, 5);
+        const pMat = new THREE.MeshLambertMaterial({ color: 0x888888 });
+        const pole = new THREE.Mesh(pGeo, pMat);
+        pole.position.set(sx, ROAD_Y + 2.25, sz);
         pole.castShadow = true;
         this.group.add(pole);
 
-        // Triangle sign (use cone geometry as approximation)
-        const signGeo = new THREE.ConeGeometry(1.0, 1.6, 3);
-        const signMat = new THREE.MeshLambertMaterial({ color: 0xffffff });
-        const sign = new THREE.Mesh(signGeo, signMat);
-        sign.rotation.z = Math.PI; // inverted triangle
-        sign.position.set(x + corner[0], ROAD_Y + 8, z + corner[1]);
+        const sGeo = new THREE.ConeGeometry(0.5, 0.9, 3);
+        const sMat = new THREE.MeshLambertMaterial({ color: 0xffffff });
+        const sign = new THREE.Mesh(sGeo, sMat);
+        sign.rotation.z = Math.PI;
+        sign.position.set(sx, ROAD_Y + 5, sz);
         sign.castShadow = true;
         this.group.add(sign);
-
-        // Red border (slightly larger cone)
-        const borderGeo = new THREE.ConeGeometry(1.25, 1.9, 3);
-        const borderMat = new THREE.MeshLambertMaterial({ color: 0xcc0000 });
-        const bord = new THREE.Mesh(borderGeo, borderMat);
-        bord.rotation.z = Math.PI;
-        bord.position.set(x + corner[0], ROAD_Y + 8, z + corner[1] - 0.1);
-        this.group.add(bord);
       }
     }
 
-    if (isSignal) {
-      // ── Traffic signals: two poles for NS and EW directions ──
-      for (const [ox, oz, ry] of [
-        [5, 5, 0],
-        [-5, -5, Math.PI],
-      ] as const) {
-        // Pole
-        const poleGeo = new THREE.CylinderGeometry(0.25, 0.35, 10, 6);
-        const poleMat = new THREE.MeshLambertMaterial({ color: 0x333333 });
-        const pole = new THREE.Mesh(poleGeo, poleMat);
-        pole.position.set(x + ox, ROAD_Y + 5, z + oz);
+    if (inter.type === "SIGNAL") {
+      const sigPos: { ox: number; oz: number; ry: number }[] = [];
+      for (const rd of roadDirs) {
+        const perpX = -rd.dz,
+          perpZ = rd.dx;
+        const dist = padSize * 0.5 + 0.5;
+        const sideOff = rd.width * 0.5 + 0.8;
+        sigPos.push({
+          ox: -rd.dx * dist + perpX * sideOff,
+          oz: -rd.dz * dist + perpZ * sideOff,
+          ry: Math.atan2(rd.dx, rd.dz),
+        });
+      }
+      const poles =
+        sigPos.length > 2
+          ? [sigPos[0], sigPos[Math.floor(sigPos.length / 2)]]
+          : sigPos.length > 0
+            ? sigPos
+            : [
+                { ox: 3, oz: 3, ry: 0 },
+                { ox: -3, oz: -3, ry: Math.PI },
+              ];
+
+      for (const sp of poles) {
+        const pGeo = new THREE.CylinderGeometry(0.15, 0.2, 7, 6);
+        const pMat = new THREE.MeshLambertMaterial({ color: 0x333333 });
+        const pole = new THREE.Mesh(pGeo, pMat);
+        pole.position.set(x + sp.ox, ROAD_Y + 3.5, z + sp.oz);
         pole.castShadow = true;
         this.group.add(pole);
 
-        // Horizontal arm
-        const armGeo = new THREE.BoxGeometry(0.4, 0.4, 4);
-        const armMat = new THREE.MeshLambertMaterial({ color: 0x333333 });
-        const arm = new THREE.Mesh(armGeo, armMat);
-        arm.position.set(x + ox, ROAD_Y + 10, z + oz);
-        arm.rotation.y = ry;
-        arm.castShadow = true;
-        this.group.add(arm);
-
-        // Signal head
-        const headGeo = new THREE.BoxGeometry(1.2, 3.6, 1.2);
-        const headMat = new THREE.MeshLambertMaterial({ color: 0x222222 });
-        const head = new THREE.Mesh(headGeo, headMat);
-        head.position.set(x + ox, ROAD_Y + 11.5, z + oz);
+        const hGeo = new THREE.BoxGeometry(0.7, 2.4, 0.7);
+        const hMat = new THREE.MeshLambertMaterial({ color: 0x222222 });
+        const head = new THREE.Mesh(hGeo, hMat);
+        head.position.set(x + sp.ox, ROAD_Y + 8, z + sp.oz);
         head.castShadow = true;
         this.group.add(head);
       }
 
-      // Shared signal lights (single set of R/Y/G controlling both poles)
+      const fp = poles[0];
       const lights: THREE.Mesh[] = [];
       for (let i = 0; i < 3; i++) {
-        const lightGeo = new THREE.SphereGeometry(0.4, 8, 6);
-        const lightMat = new THREE.MeshBasicMaterial({ color: LIGHT_DIM });
-        const light = new THREE.Mesh(lightGeo, lightMat);
-        light.position.set(x + 5, ROAD_Y + 12.8 - i * 1.2, z + 5 + 0.7);
+        const lGeo = new THREE.SphereGeometry(0.25, 8, 6);
+        const lMat = new THREE.MeshBasicMaterial({ color: LIGHT_DIM });
+        const light = new THREE.Mesh(lGeo, lMat);
+        light.position.set(x + fp.ox, ROAD_Y + 9 - i * 0.8, z + fp.oz + 0.4);
         this.group.add(light);
         lights.push(light);
       }
       this.signalLights.set(inter.id, lights);
-
-      // Set initial state from snapshot
       this.applySignalState(inter.id, inter.signalState);
     }
   }
 
-  /**
-   * Update traffic signal light colours from tick delta data.
-   */
   updateSignals(signals: SignalUpdate[]): void {
-    for (const s of signals) {
-      this.applySignalState(s.intersectionId, s.state);
-    }
+    for (const s of signals) this.applySignalState(s.intersectionId, s.state);
   }
 
-  private applySignalState(intersectionId: string, state: string): void {
-    const lights = this.signalLights.get(intersectionId);
+  private applySignalState(id: string, state: string): void {
+    const lights = this.signalLights.get(id);
     if (!lights || lights.length !== 3) return;
-
     const [red, yellow, green] = lights;
-    const setColor = (mesh: THREE.Mesh, color: number) => {
-      (mesh.material as THREE.MeshBasicMaterial).color.setHex(color);
-    };
-
-    setColor(red, LIGHT_DIM);
-    setColor(yellow, LIGHT_DIM);
-    setColor(green, LIGHT_DIM);
-
-    // Server sends GREEN_NS, GREEN_EW, YELLOW_NS, YELLOW_EW, RED_ALL_1, RED_ALL_2
-    if (state.startsWith("RED")) {
-      setColor(red, LIGHT_RED);
-    } else if (state.startsWith("YELLOW")) {
-      setColor(yellow, LIGHT_YELLOW);
-    } else if (state.startsWith("GREEN")) {
-      setColor(green, LIGHT_GREEN);
-    }
+    const set = (m: THREE.Mesh, c: number) =>
+      (m.material as THREE.MeshBasicMaterial).color.setHex(c);
+    set(red, LIGHT_DIM);
+    set(yellow, LIGHT_DIM);
+    set(green, LIGHT_DIM);
+    if (state.startsWith("RED")) set(red, LIGHT_RED);
+    else if (state.startsWith("YELLOW")) set(yellow, LIGHT_YELLOW);
+    else if (state.startsWith("GREEN")) set(green, LIGHT_GREEN);
   }
 
   private clear(): void {

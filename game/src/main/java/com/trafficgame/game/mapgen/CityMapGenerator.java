@@ -23,6 +23,7 @@ import java.util.*;
 public final class CityMapGenerator {
 
     private final int seed;
+    private int[][] districtSeeds;
 
     public CityMapGenerator(int seed) {
         this.seed = seed;
@@ -91,7 +92,7 @@ public final class CityMapGenerator {
         // 7. Terrain tile map with world-space elevation
         TileMap terrain = generateTerrain(grid, gridW, gridH, districtGrid, heightMap);
 
-        return new GeneratedMap(terrain, roads, buildings, districtGrid);
+        return new GeneratedMap(terrain, roads, buildings, districtGrid, districtSeeds);
     }
 
     /* ═════════════════════════════════════════════════════════ */
@@ -408,6 +409,7 @@ public final class CityMapGenerator {
             s[0] = Math.max(bMinX + 1, Math.min(bMaxX - 1, s[0]));
             s[1] = Math.max(bMinY + 1, Math.min(bMaxY - 1, s[1]));
         }
+        this.districtSeeds = seeds;
 
         // Voronoi: each buildable cell gets nearest district
         for (int x = 0; x < gw; x++) {
@@ -603,6 +605,7 @@ public final class CityMapGenerator {
             TileMap terrain,
             RoadNetwork roads,
             List<BuildingData> buildings,
-            int[][] districtGrid
+            int[][] districtGrid,
+            int[][] districtSeeds
     ) {}
 }

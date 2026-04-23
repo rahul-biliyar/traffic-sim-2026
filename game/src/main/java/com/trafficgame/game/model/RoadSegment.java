@@ -33,6 +33,7 @@ public final class RoadSegment {
 
     public RoadType getRoadType() { return roadType; }
     public void setRoadType(RoadType roadType) { this.roadType = roadType; }
+    public void setType(RoadType roadType) { this.roadType = roadType; } // alias for upgrade_road command
 
     public double getCondition() { return condition; }
     public void setCondition(double condition) { this.condition = Math.max(0, Math.min(1, condition)); }
