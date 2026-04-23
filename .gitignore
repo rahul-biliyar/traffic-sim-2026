@@ -2,12 +2,19 @@
 .gradle/
 build/
 **/build/
+!gradle/wrapper/gradle-wrapper.jar
+
+# Java
+hs_err_pid*.log
+replay_pid*.log
 
 # IDE
 .idea/
 *.iml
 .vscode/
 *.code-workspace
+*.suo
+*.user
 
 # Node
 client/node_modules/
@@ -16,10 +23,18 @@ client/dist/
 # Vite
 .vite/
 
+# Logs
+logs/
+*.log
+
 # OS
 .DS_Store
+.DS_Store?
 Thumbs.db
+ehthumbs.db
 
-# Env
+# Env / secrets
 .env
 .env.local
+.env.*
+!.env.example
