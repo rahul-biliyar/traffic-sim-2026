@@ -80,6 +80,11 @@ docs/     - Game design documentation and screenshots
 
 Full mechanics are documented in [docs/GAME_DOCUMENTATION.md](docs/GAME_DOCUMENTATION.md).
 
+## Contributors
+
+- Rahul Biliyar
+- Rajee
+
 ## License
 
 MIT. See [LICENSE](LICENSE).
