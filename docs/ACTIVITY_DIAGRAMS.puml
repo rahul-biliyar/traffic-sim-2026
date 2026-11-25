@@ -1,0 +1,236 @@
+@startuml
+title Activity Diagram 1 - Game Initialization Flow
+
+start
+:Application launched;
+:Client opens WebSocket connection to /ws/game/{sessionId};
+:Server creates GameSession;
+:Instantiate TrafficGame(seed);
+
+:CityMapGenerator generates 64x64 map;
+:Generate height map (mountains north, ocean south, river, canyon);
+:Classify cells (WATER, FOREST, EMPTY);
+:Remove isolated water (BFS flood-fill);
+:Mark beach cells (EMPTY near WATER -> PARK);
+:Assign districts via Voronoi (7 seeds);
+
+:RoadPlanner generates road network;
+:Lay arterial grid lines;
+:Fill local roads per district spacing;
+:Mark intersections;
+:Add tunnel entries;
+:Build road graph (nodes + edges);
+:Assign intersection controls;
+:Prune dead-end nodes;
+
+:BuildingPlacer places structures;
+:Place trees and vegetation;
+:Generate terrain elevation;
+
+:Initialize 7 game systems;
+:Create GameLoop at 10Hz;
+:Server sends full GameStateSnapshot;
+:Client builds Terrain/Road/Building/Vehicle renderers;
+:Game starts ticking;
+
+stop
+@enduml
+
+@startuml
+title Activity Diagram 2 - Game Tick Flow (100ms)
+
+start
+:GameLoop.tick();
+:SystemOrchestrator.update(state, dt);
+
+partition VehicleSpawnerSystem {
+  :Handle completed routes;
+  :Despawn or reroute vehicles;
+  if (vehicleCount < MAX and spawnTimer elapsed?) then (Yes)
+    :Pick entry node;
+    :Pick destination (60% interior, 40% far tunnel);
+    :Run A* pathfinding;
+    if (path found?) then (Yes)
+      :Create Vehicle entity with components;
+    else (No)
+      :Skip spawn this attempt;
+    endif
+  else (No)
+  endif
+}
+
+partition TrafficSignalSystem {
+  :For each SIGNAL intersection;
+  :Decrease timer;
+  if (timer <= 0?) then (Yes)
+    :Advance signal phase;
+    :Reset phase duration;
+  else (No)
+  endif
+}
+
+partition VehicleMovementSystem {
+  :Sort vehicles by edge/lane position;
+  :Compute effective speed and gap;
+  :Apply IDM acceleration;
+  :Check signal compliance;
+  :Update speed and edge position;
+  if (edge complete?) then (Yes)
+    :Advance to next edge in route;
+  endif
+}
+
+partition WeatherSystem {
+  :Advance season timer;
+  :Advance weather timer;
+  if (weather timer elapsed?) then (Yes)
+    :Pick new weather;
+  endif
+  :Apply speed modifier to road segments;
+}
+
+partition EventSystem {
+  :Update active events;
+  :Update forecasted events;
+  if (event cooldown elapsed?) then (Yes)
+    :Schedule new event;
+  endif
+}
+
+partition RatingSystem {
+  :Every 1s compute weighted traffic score;
+  :Assign rating grade (S to F);
+}
+
+partition CurrencySystem {
+  :Add passive RP using rating multiplier;
+}
+
+:Broadcast TickDelta (vehicles, signals, rating, weather, events);
+stop
+@enduml
+
+@startuml
+title Activity Diagram 3 - Road Placement Flow
+
+start
+:Player selects Road tool;
+:Player clicks start point;
+:Client raycasts to ground and stores (x1, y1);
+:Player drags and releases at end point;
+:Client reads (x2, y2);
+:Client sends PlayerCommand type=place_road;
+
+:Server receives WebSocket command;
+:CommandHandler.handlePlaceRoad();
+
+if (road type valid?) then (Yes)
+  :Calculate RP cost by road type;
+else (No)
+  :Return failure: invalid road type;
+  stop
+endif
+
+if (player has sufficient RP?) then (Yes)
+  :Deduct RP;
+else (No)
+  :Return failure: insufficient RP;
+  stop
+endif
+
+:Create/find intersection node at start;
+:Create/find intersection node at end;
+:Add forward edge to RoadNetwork;
+:Add reverse edge to RoadNetwork;
+:Return success result;
+
+:Client receives updated state on next tick;
+stop
+@enduml
+
+@startuml
+title Activity Diagram 4 - Vehicle Lifecycle Flow
+
+start
+:VehicleSpawner checks capacity and timer;
+if (spawn allowed?) then (Yes)
+  :Pick origin tunnel node;
+  :Choose destination (60% interior, 40% far tunnel);
+  :Run A* pathfinding;
+  if (path found?) then (Yes)
+    :Create entity;
+    :Add VehicleInfo;
+    :Add VehicleMovement;
+    :Add VehicleRoute;
+  else (No)
+    :Skip this spawn cycle;
+    stop
+  endif
+else (No)
+  stop
+endif
+
+repeat
+  :VehicleMovementSystem tick update;
+  :Apply IDM acceleration/deceleration;
+  :Check traffic signal and intersection behavior;
+  :Update speed;
+  :Update position on current edge;
+
+  if (position >= 1.0?) then (Yes)
+    if (next edge exists?) then (Yes)
+      :Switch to next edge and continue;
+    else (No)
+      :Route complete;
+      break
+    endif
+  endif
+repeat while (route not complete)
+
+if (at tunnel and random exit chance met?) then (Yes)
+  :Despawn entity;
+else (No)
+  :Reroute vehicle with new destination;
+endif
+
+:Award delivery RP using rating multiplier;
+:Increment vehiclesDelivered;
+stop
+@enduml
+
+@startuml
+title Activity Diagram 5 - Event Lifecycle Flow
+
+start
+:EventSystem cooldown expires;
+:Choose event type based on city tier;
+:Create TrafficEvent in FORECAST phase;
+:Show forecast in HUD with 45s countdown;
+
+:Countdown forecast timer;
+if (forecast timer <= 0?) then (Yes)
+  :Move event to ACTIVE phase;
+else (No)
+  :Continue forecast countdown;
+endif
+
+:Apply active effects (speed reduction, blockages, weather impacts);
+:Run active duration (90 to 360 seconds by event type);
+:Player may respond by placing roads/signals;
+
+if (active duration finished?) then (Yes)
+  :Move event to RESOLVING phase;
+else (No)
+  :Keep event ACTIVE;
+endif
+
+:Transition to COMPLETE phase;
+if (event handled well?) then (Yes)
+  :Award RP bonus;
+else (No)
+  :No reward or rating penalty;
+endif
+
+:Remove event from active list;
+stop
+@enduml
